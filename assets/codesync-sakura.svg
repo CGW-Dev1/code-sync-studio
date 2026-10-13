@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">CodeSync Studio Sakura</title>
+  <desc id="desc">A pink cherry blossom growing from connected code nodes.</desc>
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="#3d2944"/>
+  <path d="M58 198c18-42 47-63 84-72 30-8 44-25 53-52" fill="none" stroke="#9bc3b0" stroke-linecap="round" stroke-width="13"/>
+  <path d="M58 198c12-3 23-1 34 7M83 156c-4-12-2-23 5-33" fill="none" stroke="#9bc3b0" stroke-linecap="round" stroke-width="8"/>
+  <circle cx="58" cy="198" r="13" fill="#f7dce5"/>
+  <circle cx="92" cy="205" r="9" fill="#f0b1c4"/>
+  <circle cx="88" cy="123" r="9" fill="#f0b1c4"/>
+  <g fill="#f0a7bd" stroke="#fff5f7" stroke-linejoin="round" stroke-width="5">
+    <path d="M149 72c-20-22-12-45 5-48 18-3 27 19 14 43z"/>
+    <path d="M164 76c10-28 34-32 45-18 11 14-4 33-31 33z"/>
+    <path d="M166 91c28-8 44 10 38 26-6 17-31 15-44-9z"/>
+    <path d="M148 96c19 23 9 44-8 47-18 3-27-19-14-43z"/>
+    <path d="M136 82c-10 28-34 32-45 18-11-14 4-33 31-33z"/>
+  </g>
+  <circle cx="151" cy="84" r="13" fill="#f7cf88" stroke="#fff5f7" stroke-width="5"/>
+  <circle cx="153" cy="83" r="4" fill="#8e617a"/>
+</svg>
