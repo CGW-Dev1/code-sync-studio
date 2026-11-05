@@ -331,20 +331,44 @@ function parseGitRefs(raw) {
 }
 
 async function probeGit(url) {
-  const [headResult, refsResult] = await Promise.all([
-    capture('git', ['ls-remote', '--symref', url, 'HEAD']),
-    capture('git', ['ls-remote', '--heads', '--tags', '--refs', url])
-  ])
-  const headLine = headResult.stdout.split(/\r?\n/).find((line) => line.startsWith('ref: refs/heads/')) || ''
-  const defaultBranch = headLine.match(/refs\/heads\/([^\s]+)/)?.[1] || ''
-  const refs = parseGitRefs(refsResult.stdout).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+  const cleanUrl = url.trim()
+
+  let refsOutput = ''
+  try {
+    const refsResult = await capture('git', ['ls-remote', '--heads', '--tags', cleanUrl])
+    refsOutput = refsResult.stdout
+  } catch (err1) {
+    try {
+      const fallbackResult = await capture('git', ['ls-remote', cleanUrl])
+      refsOutput = fallbackResult.stdout
+    } catch {
+      throw err1
+    }
+  }
+
+  let defaultBranch = ''
+  try {
+    const headResult = await capture('git', ['ls-remote', '--symref', cleanUrl, 'HEAD'])
+    const headLine = headResult.stdout.split(/\r?\n/).find((line) => line.startsWith('ref: refs/heads/')) || ''
+    defaultBranch = headLine.match(/refs\/heads\/([^\s]+)/)?.[1] || ''
+  } catch {}
+
+  const refs = parseGitRefs(refsOutput).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+  const branches = refs.filter((item) => item.kind === 'branch')
+  const tags = refs.filter((item) => item.kind === 'tag')
+
+  if (!defaultBranch && branches.length) {
+    const found = branches.find((b) => b.name === 'master' || b.name === 'main')
+    defaultBranch = found ? found.name : branches[0].name
+  }
+
   return {
     provider: 'git',
-    url,
-    defaultBranch,
+    url: cleanUrl,
+    defaultBranch: defaultBranch || 'HEAD',
     latestRevision: refs.find((item) => item.kind === 'branch' && item.name === defaultBranch)?.hash || '',
-    branches: refs.filter((item) => item.kind === 'branch'),
-    tags: refs.filter((item) => item.kind === 'tag').slice(-100),
+    branches,
+    tags: tags.slice(-100),
     checkedAt: new Date().toISOString()
   }
 }

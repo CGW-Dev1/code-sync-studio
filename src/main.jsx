@@ -174,11 +174,14 @@ function getRepoVersionOptions(repoData, provider) {
       { id: 'default', kind: 'default', name: '', label: `默认主线 (${defaultBranchName})` }
     ]
     if (repoData.branches?.length) {
-      repoData.branches
-        .filter((b) => b.name !== repoData.defaultBranch)
-        .forEach((b) => {
-          list.push({ id: `branch:${b.name}`, kind: 'branch', name: b.name, label: `分支 · ${b.name}` })
+      repoData.branches.forEach((b) => {
+        list.push({
+          id: `branch:${b.name}`,
+          kind: 'branch',
+          name: b.name,
+          label: b.name === repoData.defaultBranch ? `分支 · ${b.name} (默认主线)` : `分支 · ${b.name}`
         })
+      })
     }
     if (repoData.tags?.length) {
       repoData.tags.forEach((t) => {
@@ -491,6 +494,17 @@ function App() {
     setBatchProbeErrorMap({})
     setItemBranchOverrides({})
   }, [batchProvider])
+
+  useEffect(() => {
+    if (!api || !batchItems.length || batchRunning) return
+    const timer = setTimeout(() => {
+      const unprobed = batchItems.filter((item) => !batchRepoDataMap[item.url] && !batchProbingMap[item.url])
+      if (unprobed.length) {
+        unprobed.forEach((item) => probeSingleBatchRepo(item.url))
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [batchItems, batchProvider])
 
   const protocolWarning = useMemo(() => {
     if (!activeBatchUrls.trim()) return null
@@ -1486,7 +1500,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.0.14</span>
+            <span>CodeSync Studio 1.0.15</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>
@@ -1814,9 +1828,9 @@ function BatchSyncPanel({
                       className="batch-probe-btn"
                       onClick={() => onProbeSingle(item.url)}
                       disabled={batchRunning || isProbing}
-                      title={repoData ? '重新读取该仓库版本' : '读取该仓库的可选分支和版本'}
+                      title={probeErr ? `读取失败: ${probeErr} (点击重试)` : repoData ? '重新读取该仓库分支与版本' : '读取该仓库的可选分支和版本'}
                     >
-                      {isProbing ? <LoaderCircle size={12} className="spin" /> : <Search size={12} />}
+                      {isProbing ? <LoaderCircle size={12} className="spin" /> : probeErr ? <AlertCircle size={12} color="#c84c59" /> : <Search size={12} />}
                     </button>
                   </div>
 
