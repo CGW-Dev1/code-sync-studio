@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('codeSync', {
   choosePath: () => ipcRenderer.invoke('path:choose'),
   chooseFile: () => ipcRenderer.invoke('path:choose-file'),
+  checkPath: (target) => ipcRenderer.invoke('path:check', target),
   probeRepository: (payload) => ipcRenderer.invoke('repository:probe', payload),
   browseRepository: (payload) => ipcRenderer.invoke('repository:browse', payload),
   inspectLocal: (payload) => ipcRenderer.invoke('repository:inspect', payload),

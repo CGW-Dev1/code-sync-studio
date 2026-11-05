@@ -674,6 +674,24 @@ ipcMain.handle('path:choose-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], title: '选择 SSH 私钥文件' })
   return result.canceled ? '' : result.filePaths[0]
 })
+ipcMain.handle('path:check', (_, target) => {
+  if (!target || typeof target !== 'string') return { exists: false, isDirectory: false, empty: true }
+  try {
+    if (!fs.existsSync(target)) return { exists: false, isDirectory: false, empty: true }
+    const stat = fs.statSync(target)
+    if (!stat.isDirectory()) return { exists: true, isDirectory: false, empty: false }
+    const entries = fs.readdirSync(target)
+    return {
+      exists: true,
+      isDirectory: true,
+      empty: entries.length === 0,
+      hasGit: fs.existsSync(path.join(target, '.git')),
+      hasSvn: fs.existsSync(path.join(target, '.svn'))
+    }
+  } catch (err) {
+    return { exists: false, isDirectory: false, empty: true, error: err.message }
+  }
+})
 ipcMain.handle('repository:probe', (_, payload) => probeRepository(payload))
 ipcMain.handle('repository:browse', (_, payload) => browseRepository(payload))
 ipcMain.handle('credentials:test', (_, payload) => testRepositoryCredentials(payload))
