@@ -166,6 +166,160 @@ function parseUrlList(text, provider, targetRoot) {
   return items
 }
 
+function getRepoVersionOptions(repoData, provider) {
+  if (!repoData) return []
+  if (provider === 'git') {
+    const defaultBranchName = repoData.defaultBranch || 'HEAD'
+    const list = [
+      { id: 'default', kind: 'default', name: '', label: `默认主线 (${defaultBranchName})` }
+    ]
+    if (repoData.branches?.length) {
+      repoData.branches
+        .filter((b) => b.name !== repoData.defaultBranch)
+        .forEach((b) => {
+          list.push({ id: `branch:${b.name}`, kind: 'branch', name: b.name, label: `分支 · ${b.name}` })
+        })
+    }
+    if (repoData.tags?.length) {
+      repoData.tags.forEach((t) => {
+        list.push({ id: `tag:${t.name}`, kind: 'tag', name: t.name, label: `标签 · ${t.name}` })
+      })
+    }
+    return list
+  }
+
+  // SVN
+  const list = [
+    { id: 'default', kind: 'default', name: '', revision: 'HEAD', label: `最新版本 · r${repoData.latestRevision || 'HEAD'}` }
+  ]
+
+  if (repoData.directories?.length) {
+    repoData.directories.forEach((dir) => {
+      list.push({
+        id: `dir:${dir}`,
+        kind: 'dir',
+        name: dir,
+        subPath: dir,
+        label: `目录/标签 · ${dir}`
+      })
+    })
+  }
+
+  if (repoData.revisions?.length) {
+    repoData.revisions.slice(0, 30).forEach((rev) => {
+      const msg = rev.message ? rev.message.replace(/[\r\n]+/g, ' ').slice(0, 24) : '无说明'
+      list.push({
+        id: `rev:${rev.revision}`,
+        kind: 'rev',
+        name: `r${rev.revision}`,
+        revision: rev.revision,
+        label: `r${rev.revision} · ${msg} (${rev.author || '未知'})`
+      })
+    })
+  }
+
+  return list
+}
+
+function resolveItemVersionPayload(item, branchSelection, batchProvider, globalBranch, batchSvnMainlineOnly) {
+  let val = (branchSelection !== undefined ? branchSelection : item.parsedBranch)?.trim()
+  if (!val && batchProvider === 'git') {
+    val = globalBranch.trim()
+  }
+
+  let finalUrl = item.url
+  if (batchProvider === 'git') {
+    let branchName = ''
+    if (val && val !== 'default' && val !== 'HEAD') {
+      if (val.startsWith('branch:') || val.startsWith('tag:')) {
+        branchName = val.split(':')[1] || ''
+      } else {
+        branchName = val
+      }
+    }
+    return {
+      finalUrl,
+      payloadVersion: {
+        kind: 'branch',
+        name: branchName,
+        label: branchName || '默认分支'
+      }
+    }
+  }
+
+  // SVN
+  if (!val || val === 'default' || val === 'HEAD') {
+    if (batchSvnMainlineOnly && isTrunkUrl(item.url)) {
+      finalUrl = item.url
+    }
+    return {
+      finalUrl,
+      payloadVersion: {
+        kind: 'svn',
+        revision: 'HEAD',
+        sourceUrl: finalUrl,
+        label: '最新版本'
+      }
+    }
+  }
+
+  if (val.startsWith('dir:')) {
+    const subDir = val.slice(4).trim()
+    finalUrl = joinSvnUrl(item.url, subDir)
+    return {
+      finalUrl,
+      payloadVersion: {
+        kind: 'svn',
+        revision: 'HEAD',
+        sourceUrl: finalUrl,
+        label: `目录/标签 · ${subDir}`
+      }
+    }
+  }
+
+  if (val.startsWith('rev:')) {
+    const revNum = val.slice(4).trim()
+    return {
+      finalUrl,
+      payloadVersion: {
+        kind: 'svn',
+        revision: revNum,
+        sourceUrl: finalUrl,
+        label: `r${revNum}`
+      }
+    }
+  }
+
+  const isRevision = /^(?:r)?\d+$/i.test(val)
+  if (isRevision) {
+    const revNum = val.replace(/^r/i, '')
+    return {
+      finalUrl,
+      payloadVersion: {
+        kind: 'svn',
+        revision: revNum,
+        sourceUrl: finalUrl,
+        label: `r${revNum}`
+      }
+    }
+  }
+
+  if (isTrunkUrl(item.url)) {
+    finalUrl = `${item.url.replace(/\/trunk\/?$/i, '')}/${val.replace(/^\/+/, '')}`
+  } else {
+    finalUrl = joinSvnUrl(item.url, val)
+  }
+  return {
+    finalUrl,
+    payloadVersion: {
+      kind: 'svn',
+      revision: 'HEAD',
+      sourceUrl: finalUrl,
+      label: val
+    }
+  }
+}
+
 function resolveSvnMainlineUrl(repo, url) {
   if (repo?.mainlines?.[0]?.url) return repo.mainlines[0].url
   const baseUrl = (repo?.url || url || '').trim().replace(/\/+$/, '')
@@ -303,6 +457,40 @@ function App() {
   const batchItems = useMemo(() => {
     return parseUrlList(activeBatchUrls, batchProvider, batchTargetRoot)
   }, [activeBatchUrls, batchProvider, batchTargetRoot])
+
+  const [batchRepoDataMap, setBatchRepoDataMap] = useState({})
+  const [batchProbingMap, setBatchProbingMap] = useState({})
+  const [batchProbeErrorMap, setBatchProbeErrorMap] = useState({})
+
+  async function probeSingleBatchRepo(repoUrl) {
+    if (!repoUrl || !api || batchProbingMap[repoUrl]) return
+    setBatchProbingMap((prev) => ({ ...prev, [repoUrl]: true }))
+    setBatchProbeErrorMap((prev) => ({ ...prev, [repoUrl]: '' }))
+    try {
+      const result = await api.probeRepository({ provider: batchProvider, url: repoUrl })
+      setBatchRepoDataMap((prev) => ({ ...prev, [repoUrl]: result }))
+    } catch (err) {
+      setBatchProbeErrorMap((prev) => ({ ...prev, [repoUrl]: appError(err) }))
+    } finally {
+      setBatchProbingMap((prev) => ({ ...prev, [repoUrl]: false }))
+    }
+  }
+
+  async function probeAllBatchRepos() {
+    if (!api || !batchItems.length) return
+    const unprobed = batchItems.filter((item) => !batchRepoDataMap[item.url] && !batchProbingMap[item.url])
+    const toProbe = unprobed.length ? unprobed : batchItems
+    showToast(`正在读取 ${toProbe.length} 个仓库的可选版本...`)
+    await Promise.all(toProbe.map((item) => probeSingleBatchRepo(item.url)))
+    showToast('仓库版本读取完毕')
+  }
+
+  useEffect(() => {
+    setBatchRepoDataMap({})
+    setBatchProbingMap({})
+    setBatchProbeErrorMap({})
+    setItemBranchOverrides({})
+  }, [batchProvider])
 
   const protocolWarning = useMemo(() => {
     if (!activeBatchUrls.trim()) return null
@@ -670,41 +858,17 @@ function App() {
         }
       }
 
-      const customBranch = itemBranchOverrides[item.id] !== undefined
+      const branchSelection = itemBranchOverrides[item.id] !== undefined
         ? itemBranchOverrides[item.id]
         : item.parsedBranch
 
-      const targetBranch = (customBranch || (batchProvider === 'git' ? batchGitBranch : '')).trim()
-
-      let payloadVersion
-      let finalUrl = item.url
-      if (batchProvider === 'git') {
-        const branchName = targetBranch && targetBranch !== 'HEAD' ? targetBranch : ''
-        payloadVersion = {
-          kind: 'branch',
-          name: branchName,
-          label: branchName || '默认分支'
-        }
-      } else {
-        const isRevision = /^(?:r)?\d+$/i.test(targetBranch)
-        const revNum = isRevision ? targetBranch.replace(/^r/i, '') : 'HEAD'
-        if (targetBranch && !isRevision) {
-          if (isTrunkUrl(item.url)) {
-            finalUrl = `${item.url.replace(/\/trunk\/?$/i, '')}/${targetBranch.replace(/^\/+/, '')}`
-          } else {
-            finalUrl = joinSvnUrl(item.url, targetBranch)
-          }
-        } else if (batchSvnMainlineOnly && isTrunkUrl(item.url)) {
-          finalUrl = item.url
-        }
-
-        payloadVersion = {
-          kind: 'svn',
-          revision: revNum,
-          sourceUrl: finalUrl,
-          label: isRevision ? `r${revNum}` : targetBranch || '最新修订'
-        }
-      }
+      const { finalUrl, payloadVersion } = resolveItemVersionPayload(
+        item,
+        branchSelection,
+        batchProvider,
+        batchGitBranch,
+        batchSvnMainlineOnly
+      )
 
       setBatchItemStatuses((prev) => ({ ...prev, [item.id]: { status: 'running', error: '' } }))
       const actionLabel = taskAction === 'pull' ? '拉取' : '更新'
@@ -1255,6 +1419,11 @@ function App() {
                 itemBranchOverrides={itemBranchOverrides}
                 onItemBranchChange={handleItemBranchChange}
                 onApplyGlobalBranch={handleApplyGlobalBranch}
+                batchRepoDataMap={batchRepoDataMap}
+                batchProbingMap={batchProbingMap}
+                batchProbeErrorMap={batchProbeErrorMap}
+                onProbeSingle={probeSingleBatchRepo}
+                onProbeAll={probeAllBatchRepos}
                 batchRunning={batchRunning}
                 protocolWarning={protocolWarning}
                 onStart={() => runBatchSync(false)}
@@ -1317,7 +1486,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.0.13</span>
+            <span>CodeSync Studio 1.0.14</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>
@@ -1366,6 +1535,11 @@ function BatchSyncPanel({
   itemBranchOverrides,
   onItemBranchChange,
   onApplyGlobalBranch,
+  batchRepoDataMap,
+  batchProbingMap,
+  batchProbeErrorMap,
+  onProbeSingle,
+  onProbeAll,
   batchRunning,
   protocolWarning,
   onStart,
@@ -1526,13 +1700,25 @@ function BatchSyncPanel({
       {batchItems.length > 0 && (
         <div className="batch-queue-container">
           <div className="batch-queue-header">
-            <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个，可单独配置每个地址的分支/版本)</span>
-            <span style={{ fontSize: 9, color: '#8d7888' }}>按顺序依次执行</span>
+            <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个)</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                className="batch-fetch-all-btn"
+                onClick={onProbeAll}
+                disabled={batchRunning}
+                title="读取所有仓库的可选分支、标签和修订版本"
+              >
+                <Search size={11} />
+                读取全部可选版本
+              </button>
+              <span style={{ fontSize: 9, color: '#8d7888' }}>按顺序依次执行</span>
+            </div>
           </div>
           <div className="batch-queue-col-headers">
             <span>#</span>
             <span>仓库名称</span>
-            <span>代码版本 / 分支</span>
+            <span>代码版本 / 分支 (下拉选择)</span>
             <span>本地目标目录</span>
             <span style={{ textAlign: 'center' }}>状态</span>
           </div>
@@ -1546,25 +1732,94 @@ function BatchSyncPanel({
                 statusClass === 'error' ? '失败' :
                 statusClass === 'skipped' ? '跳过' : '等待'
 
-              const currentBranchVal = itemBranchOverrides[item.id] !== undefined
+              const repoData = batchRepoDataMap[item.url]
+              const isProbing = Boolean(batchProbingMap[item.url])
+              const probeErr = batchProbeErrorMap[item.url]
+              const versionOptions = getRepoVersionOptions(repoData, batchProvider)
+
+              const currentVal = itemBranchOverrides[item.id] !== undefined
                 ? itemBranchOverrides[item.id]
-                : (item.parsedBranch || '')
+                : (item.parsedBranch || 'default')
 
               return (
                 <div key={item.id} className={`batch-queue-item ${statusClass}`}>
                   <span className="batch-item-index">#{index + 1}</span>
                   <span className="batch-item-name" title={item.name}>{item.name}</span>
-                  <div className="batch-branch-input-wrap">
-                    {batchProvider === 'git' ? <GitBranch size={12} /> : <Server size={12} />}
-                    <input
-                      type="text"
-                      value={currentBranchVal}
-                      onChange={(e) => onItemBranchChange(item.id, e.target.value)}
-                      disabled={batchRunning}
-                      placeholder={batchProvider === 'git' ? (batchGitBranch ? `默认 (${batchGitBranch})` : '默认主线') : '最新修订'}
-                      title={batchProvider === 'git' ? '输入要拉取的目标分支/标签，留空使用默认分支' : '输入要检出的 SVN 修订版本号或分支路径'}
-                    />
+
+                  <div className="batch-version-select-wrap">
+                    {isProbing ? (
+                      <div className="batch-branch-input-wrap" style={{ flex: 1, color: '#9a607a', fontSize: '9.5px' }}>
+                        <LoaderCircle size={12} className="spin" />
+                        <span>读取版本列表中...</span>
+                      </div>
+                    ) : (
+                      <select
+                        className="batch-version-select"
+                        value={currentVal}
+                        onChange={(e) => onItemBranchChange(item.id, e.target.value)}
+                        disabled={batchRunning}
+                        title={probeErr ? `读取失败: ${probeErr}` : currentVal && currentVal !== 'default' ? `已选版本：${currentVal}` : '下拉选择拉取的版本'}
+                      >
+                        <option value="default">
+                          {batchProvider === 'git'
+                            ? (repoData?.defaultBranch ? `默认主线 (${repoData.defaultBranch})` : '默认主线 (HEAD)')
+                            : (repoData?.latestRevision ? `最新版本 (r${repoData.latestRevision})` : '最新版本 (HEAD)')}
+                        </option>
+
+                        {/* 如果在输入链接中指定了分支但未探测到，予以保留展示 */}
+                        {item.parsedBranch && !versionOptions.some((o) => o.name === item.parsedBranch || o.id === item.parsedBranch) && (
+                          <option value={item.parsedBranch}>链接指定 · {item.parsedBranch}</option>
+                        )}
+
+                        {/* Git 分支分组 */}
+                        {versionOptions.some((o) => o.kind === 'branch') && (
+                          <optgroup label="分支 (Branches)">
+                            {versionOptions.filter((o) => o.kind === 'branch').map((opt) => (
+                              <option key={opt.id} value={opt.name}>{opt.label}</option>
+                            ))}
+                          </optgroup>
+                        )}
+
+                        {/* Git 标签分组 */}
+                        {versionOptions.some((o) => o.kind === 'tag') && (
+                          <optgroup label="标签 (Tags)">
+                            {versionOptions.filter((o) => o.kind === 'tag').map((opt) => (
+                              <option key={opt.id} value={opt.name}>{opt.label}</option>
+                            ))}
+                          </optgroup>
+                        )}
+
+                        {/* SVN 子目录/标签分组 */}
+                        {versionOptions.some((o) => o.kind === 'dir') && (
+                          <optgroup label="目录 / 标签 (Directories / Tags)">
+                            {versionOptions.filter((o) => o.kind === 'dir').map((opt) => (
+                              <option key={opt.id} value={`dir:${opt.subPath}`}>{opt.label}</option>
+                            ))}
+                          </optgroup>
+                        )}
+
+                        {/* SVN 修订版本历史分组 */}
+                        {versionOptions.some((o) => o.kind === 'rev') && (
+                          <optgroup label="修订版本 (Revisions)">
+                            {versionOptions.filter((o) => o.kind === 'rev').map((opt) => (
+                              <option key={opt.id} value={`rev:${opt.revision}`}>{opt.label}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                    )}
+
+                    <button
+                      type="button"
+                      className="batch-probe-btn"
+                      onClick={() => onProbeSingle(item.url)}
+                      disabled={batchRunning || isProbing}
+                      title={repoData ? '重新读取该仓库版本' : '读取该仓库的可选分支和版本'}
+                    >
+                      {isProbing ? <LoaderCircle size={12} className="spin" /> : <Search size={12} />}
+                    </button>
                   </div>
+
                   <span className="batch-item-target" title={item.target}>{item.target}</span>
                   <span className={`batch-status-badge ${statusClass}`} title={itemState.error || ''}>
                     {statusClass === 'running' && <LoaderCircle size={10} className="spin" />}
@@ -1581,7 +1836,7 @@ function BatchSyncPanel({
 
       <div className="execution-note">
         <Info size={15} />
-        <span>支持不同链接拉取不同版本：可在文本中以空格/“#”/“@”追加分支，也可直接在上方清单中直接编辑各个仓库的目标分支。</span>
+        <span>支持下拉选择版本：点击上方“读取全部可选版本”或单行搜索图标，即可从下拉框中选择要检出的分支、Tag 或修订版本。</span>
       </div>
 
       <div className="panel-actions">

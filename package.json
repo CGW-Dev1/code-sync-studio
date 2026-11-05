@@ -1,6 +1,6 @@
 {
   "name": "code-sync-studio",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "private": true,
   "description": "Git and SVN pull/update desktop utility",
   "type": "module",
