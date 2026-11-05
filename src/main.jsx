@@ -1500,7 +1500,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.0.15</span>
+            <span>CodeSync Studio 1.0.16</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>

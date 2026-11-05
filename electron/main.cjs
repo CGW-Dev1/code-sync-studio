@@ -185,6 +185,26 @@ function svnAuthSummary(credentials) {
   return '未配置软件账号密码，使用 SVN 本机凭证缓存'
 }
 
+function isPrivateOrLocalHost(urlStr) {
+  try {
+    const raw = String(urlStr || '').trim()
+    if (!raw) return false
+    let host = ''
+    if (raw.startsWith('git@')) {
+      host = raw.slice(4).split(/[:/]/)[0].toLowerCase()
+    } else {
+      const u = new URL(raw)
+      host = u.hostname.toLowerCase()
+    }
+    if (host === 'localhost' || host === '127.0.0.1') return true
+    if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return true
+    if (host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.corp') || host.includes('hundsun')) return true
+    return false
+  } catch {
+    return false
+  }
+}
+
 function svnError(message, authSummary = '') {
   const value = stripAnsi(String(message || '')).trim()
   const authHint = authSummary ? `\n认证状态：${authSummary}` : ''
@@ -251,14 +271,26 @@ function createCommandSession(command, args, options = {}) {
   let preparedArgs = [...args]
   let authSummary = ''
 
+  const targetUrl = options.targetUrl || args.find((a) => typeof a === 'string' && (/^https?:\/\//i.test(a) || /^svn(?:\+[a-z]+)?:\/\//i.test(a) || /^git@/i.test(a))) || ''
+
+  if (targetUrl && isPrivateOrLocalHost(targetUrl)) {
+    if (command === 'git') {
+      preparedArgs.unshift('-c', 'http.proxy=')
+    }
+    delete env.HTTP_PROXY
+    delete env.HTTPS_PROXY
+    delete env.ALL_PROXY
+    delete env.http_proxy
+    delete env.https_proxy
+    delete env.all_proxy
+  }
+
   if (command === 'git') {
     const gitCredentials = resolveGitCredentials(options.gitCredentials)
     authSummary = gitAuthSummary(gitCredentials)
     if (gitCredentials.mode === 'https' && (gitCredentials.username || gitCredentials.token)) {
       env.CODESYNC_GIT_USERNAME = gitCredentials.username
       env.CODESYNC_GIT_TOKEN = gitCredentials.token
-      const helperCommand = '!f() { printf "username=%s\\npassword=%s\\n" "$CODESYNC_GIT_USERNAME" "$CODESYNC_GIT_TOKEN"; }; f'
-      preparedArgs = ['-c', 'credential.helper=', '-c', `credential.helper=${helperCommand}`, ...preparedArgs]
       const helper = createAskpassHelper({ username: gitCredentials.username, password: gitCredentials.token, passphrase: '' })
       env.GIT_ASKPASS = helper.path
       cleanup.push(helper.cleanup)
@@ -335,11 +367,11 @@ async function probeGit(url) {
 
   let refsOutput = ''
   try {
-    const refsResult = await capture('git', ['ls-remote', '--heads', '--tags', cleanUrl])
+    const refsResult = await capture('git', ['ls-remote', '--heads', '--tags', cleanUrl], os.tmpdir(), { targetUrl: cleanUrl })
     refsOutput = refsResult.stdout
   } catch (err1) {
     try {
-      const fallbackResult = await capture('git', ['ls-remote', cleanUrl])
+      const fallbackResult = await capture('git', ['ls-remote', cleanUrl], os.tmpdir(), { targetUrl: cleanUrl })
       refsOutput = fallbackResult.stdout
     } catch {
       throw err1
@@ -348,7 +380,7 @@ async function probeGit(url) {
 
   let defaultBranch = ''
   try {
-    const headResult = await capture('git', ['ls-remote', '--symref', cleanUrl, 'HEAD'])
+    const headResult = await capture('git', ['ls-remote', '--symref', cleanUrl, 'HEAD'], os.tmpdir(), { targetUrl: cleanUrl })
     const headLine = headResult.stdout.split(/\r?\n/).find((line) => line.startsWith('ref: refs/heads/')) || ''
     defaultBranch = headLine.match(/refs\/heads\/([^\s]+)/)?.[1] || ''
   } catch {}
@@ -567,9 +599,9 @@ function emitLine(jobId, text, source = 'stdout') {
   if (percent) sendTaskEvent({ type: 'progress', jobId, value: Number(percent), label: clean })
 }
 
-function runProcess(jobId, command, args, cwd) {
+function runProcess(jobId, command, args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
-    const session = createCommandSession(command, args)
+    const session = createCommandSession(command, args, options)
     const child = spawn(command, session.args, { cwd, windowsHide: true, env: session.env })
     if (activeJob?.jobId === jobId) activeJob.child = child
     let stderr = ''
@@ -591,9 +623,9 @@ function runProcess(jobId, command, args, cwd) {
   })
 }
 
-async function runStep(jobId, label, command, args, cwd, progressStart, progressEnd) {
+async function runStep(jobId, label, command, args, cwd, progressStart, progressEnd, options = {}) {
   sendTaskEvent({ type: 'step', jobId, label, value: progressStart })
-  const result = await runProcess(jobId, command, args, cwd)
+  const result = await runProcess(jobId, command, args, cwd, options)
   sendTaskEvent({ type: 'progress', jobId, value: progressEnd, label })
   return result
 }
@@ -603,6 +635,7 @@ async function runTask(payload) {
   const jobId = crypto.randomUUID()
   activeJob = { jobId, child: null }
   const { provider, action, url, target, version, path: browsePath } = payload
+  const taskOptions = { targetUrl: url }
   const svnUrl = provider === 'svn' ? normalizeSvnUrl(url) : url
   const sparsePath = typeof browsePath === 'string' ? browsePath.replace(/^\/+|\/+$/g, '') : ''
   sendTaskEvent({ type: 'start', jobId, label: action === 'pull' ? '开始拉取' : '开始更新', provider, action })
@@ -615,27 +648,27 @@ async function runTask(payload) {
         if (branchName && branchName !== 'HEAD') sparseArgs.push('--branch', branchName)
         sparseArgs.push(url, target)
         try {
-          await runStep(jobId, label, 'git', sparseArgs, undefined, 4, 72)
+          await runStep(jobId, label, 'git', sparseArgs, undefined, 4, 72, taskOptions)
         } catch {
           if (fs.existsSync(target)) { try { fs.rmSync(target, { recursive: true, force: true }) } catch {} }
           const plainArgs = ['clone', '--progress', '--sparse']
           if (branchName && branchName !== 'HEAD') plainArgs.push('--branch', branchName)
           plainArgs.push(url, target)
-          await runStep(jobId, `${label}（服务器不支持部分克隆，已切换兼容模式）`, 'git', plainArgs, undefined, 4, 72)
+          await runStep(jobId, `${label}（服务器不支持部分克隆，已切换兼容模式）`, 'git', plainArgs, undefined, 4, 72, taskOptions)
         }
-        await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 78, 96)
+        await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 78, 96, taskOptions)
       } else {
         const args = ['clone', '--progress']
         const branchName = typeof version?.name === 'string' ? version.name.trim() : ''
         if (branchName && branchName !== 'HEAD') args.push('--branch', branchName)
         args.push(url, target)
-        await runStep(jobId, `克隆 Git ${branchName && branchName !== 'HEAD' ? branchName : '默认版本'}`, 'git', args, undefined, 4, 92)
+        await runStep(jobId, `克隆 Git ${branchName && branchName !== 'HEAD' ? branchName : '默认版本'}`, 'git', args, undefined, 4, 92, taskOptions)
       }
     } else if (provider === 'git') {
       if (version?.kind === 'tag') {
-        await runStep(jobId, `获取标签 ${version.name}`, 'git', ['-C', target, 'fetch', '--progress', 'origin', 'tag', version.name], target, 4, 70)
-        if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 72, 80)
-        await runStep(jobId, `切换到标签 ${version.name}`, 'git', ['-C', target, 'checkout', '--detach', `refs/tags/${version.name}`], target, 82, 96)
+        await runStep(jobId, `获取标签 ${version.name}`, 'git', ['-C', target, 'fetch', '--progress', 'origin', 'tag', version.name], target, 4, 70, taskOptions)
+        if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 72, 80, taskOptions)
+        await runStep(jobId, `切换到标签 ${version.name}`, 'git', ['-C', target, 'checkout', '--detach', `refs/tags/${version.name}`], target, 82, 96, taskOptions)
       } else {
         const branchResult = await capture('git', ['-C', target, 'branch', '--show-current'], target).catch(() => ({ stdout: '' }))
         const currentBranch = branchResult.stdout.trim()
@@ -643,40 +676,40 @@ async function runTask(payload) {
 
         const fetchArgs = ['-C', target, 'fetch', '--progress', '--prune', 'origin']
         if (branch) fetchArgs.push(branch)
-        await runStep(jobId, `获取分支 ${branch || currentBranch || '最新提交'}`, 'git', fetchArgs, target, 4, 50)
+        await runStep(jobId, `获取分支 ${branch || currentBranch || '最新提交'}`, 'git', fetchArgs, target, 4, 50, taskOptions)
 
-        if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 52, 65)
+        if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 52, 65, taskOptions)
 
         if (branch && currentBranch && branch !== currentBranch) {
           try {
-            await runStep(jobId, `切换分支至 ${branch}`, 'git', ['-C', target, 'checkout', branch], target, 66, 75)
+            await runStep(jobId, `切换分支至 ${branch}`, 'git', ['-C', target, 'checkout', branch], target, 66, 75, taskOptions)
           } catch {
-            await runStep(jobId, `检出远程分支 ${branch}`, 'git', ['-C', target, 'checkout', '-B', branch, `origin/${branch}`], target, 66, 75)
+            await runStep(jobId, `检出远程分支 ${branch}`, 'git', ['-C', target, 'checkout', '-B', branch, `origin/${branch}`], target, 66, 75, taskOptions)
           }
         }
 
         const activeBranch = branch || currentBranch
         if (activeBranch) {
-          await runStep(jobId, `更新分支 ${activeBranch}`, 'git', ['-C', target, 'pull', '--progress', '--ff-only', 'origin', activeBranch], target, 76, 96)
+          await runStep(jobId, `更新分支 ${activeBranch}`, 'git', ['-C', target, 'pull', '--progress', '--ff-only', 'origin', activeBranch], target, 76, 96, taskOptions)
         } else {
-          await runStep(jobId, '更新工作副本', 'git', ['-C', target, 'pull', '--progress', '--ff-only'], target, 76, 96)
+          await runStep(jobId, '更新工作副本', 'git', ['-C', target, 'pull', '--progress', '--ff-only'], target, 76, 96, taskOptions)
         }
       }
     } else if (provider === 'svn' && action === 'pull') {
       const args = ['checkout', svnUrl]
       if (version?.revision && version.revision !== 'HEAD') args.push('--revision', version.revision)
       args.push(target)
-      await runStep(jobId, `检出 SVN ${version?.label || version?.revision || 'HEAD'}`, 'svn', args, undefined, 4, 96)
+      await runStep(jobId, `检出 SVN ${version?.label || version?.revision || 'HEAD'}`, 'svn', args, undefined, 4, 96, taskOptions)
     } else if (provider === 'svn' && sparsePath) {
       const args = ['switch', '--ignore-ancestry', svnUrl]
       if (version?.revision && version.revision !== 'HEAD') args.push('--revision', version.revision)
       args.push(target)
-      await runStep(jobId, `切换 SVN 工作副本到 ${sparsePath} 并更新`, 'svn', args, target, 4, 96)
+      await runStep(jobId, `切换 SVN 工作副本到 ${sparsePath} 并更新`, 'svn', args, target, 4, 96, taskOptions)
     } else {
       const args = ['update']
       if (version?.revision && version.revision !== 'HEAD') args.push('--revision', version.revision)
       args.push(target)
-      await runStep(jobId, `更新 SVN ${version?.label || version?.revision || 'HEAD'}`, 'svn', args, target, 4, 96)
+      await runStep(jobId, `更新 SVN ${version?.label || version?.revision || 'HEAD'}`, 'svn', args, target, 4, 96, taskOptions)
     }
     sendTaskEvent({ type: 'done', jobId, ok: true, value: 100, label: '任务完成' })
     return { jobId, ok: true }
