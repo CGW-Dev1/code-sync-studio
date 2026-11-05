@@ -134,6 +134,23 @@ function stripAnsi(value) {
   return value.replace(/[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, '')
 }
 
+const gbkDecoder = new TextDecoder('gbk')
+const utf8FatalDecoder = new TextDecoder('utf-8', { fatal: true })
+
+function decodeProcessChunk(chunk) {
+  if (!chunk) return ''
+  if (typeof chunk === 'string') return chunk
+  try {
+    return utf8FatalDecoder.decode(chunk)
+  } catch {
+    try {
+      return gbkDecoder.decode(chunk)
+    } catch {
+      return chunk.toString('utf8')
+    }
+  }
+}
+
 function normalizeSvnUrl(value) {
   const input = String(value || '').trim()
   if (!input) return ''
@@ -338,8 +355,8 @@ function capture(command, args, cwd, options = {}) {
     const child = spawn(command, session.args, { cwd, windowsHide: true, env: session.env })
     let stdout = ''
     let stderr = ''
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+    child.stdout.on('data', (chunk) => { stdout += decodeProcessChunk(chunk) })
+    child.stderr.on('data', (chunk) => { stderr += decodeProcessChunk(chunk) })
     child.on('error', (error) => { session.cleanup(); reject(commandError(command, args, error)) })
     child.on('close', (code) => {
       session.cleanup()
@@ -608,8 +625,16 @@ function runProcess(jobId, command, args, cwd, options = {}) {
     let stdout = ''
     let settled = false
     const finish = (callback, value) => { if (!settled) { settled = true; callback(value) } }
-    child.stdout.on('data', (chunk) => { const value = chunk.toString(); stdout += value; value.split(/\r?\n|\r/).forEach((line) => emitLine(jobId, line, 'stdout')) })
-    child.stderr.on('data', (chunk) => { const value = chunk.toString(); stderr += value; value.split(/\r?\n|\r/).forEach((line) => emitLine(jobId, line, 'stderr')) })
+    child.stdout.on('data', (chunk) => {
+      const value = decodeProcessChunk(chunk)
+      stdout += value
+      value.split(/\r?\n|\r/).forEach((line) => emitLine(jobId, line, 'stdout'))
+    })
+    child.stderr.on('data', (chunk) => {
+      const value = decodeProcessChunk(chunk)
+      stderr += value
+      value.split(/\r?\n|\r/).forEach((line) => emitLine(jobId, line, 'stderr'))
+    })
     child.on('error', (error) => { session.cleanup(); finish(reject, commandError(command, args, error)) })
     child.on('close', (code, signal) => {
       session.cleanup()

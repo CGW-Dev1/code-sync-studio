@@ -224,7 +224,7 @@ function getRepoVersionOptions(repoData, provider) {
   return list
 }
 
-function resolveItemVersionPayload(item, branchSelection, batchProvider, globalBranch, batchSvnMainlineOnly) {
+function resolveItemVersionPayload(item, branchSelection, batchProvider, globalBranch, batchSvnMainlineOnly, repoData) {
   let val = (branchSelection !== undefined ? branchSelection : item.parsedBranch)?.trim()
   if (!val && batchProvider === 'git') {
     val = globalBranch.trim()
@@ -251,9 +251,14 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
   }
 
   // SVN
-  if (!val || val === 'default' || val === 'HEAD') {
-    if (batchSvnMainlineOnly && isTrunkUrl(item.url)) {
-      finalUrl = item.url
+  if (!val || val === 'default' || val === 'HEAD' || val.toLowerCase() === 'trunk') {
+    if (batchSvnMainlineOnly) {
+      if (isTrunkUrl(item.url)) {
+        finalUrl = item.url
+      } else {
+        const trunkDir = (repoData?.directories || []).find((d) => d.toLowerCase() === 'trunk') || 'trunk'
+        finalUrl = joinSvnUrl(item.url, trunkDir)
+      }
     }
     return {
       finalUrl,
@@ -261,7 +266,7 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
         kind: 'svn',
         revision: 'HEAD',
         sourceUrl: finalUrl,
-        label: '最新版本'
+        label: batchSvnMainlineOnly ? '主线 trunk' : '最新版本'
       }
     }
   }
@@ -876,12 +881,14 @@ function App() {
         ? itemBranchOverrides[item.id]
         : item.parsedBranch
 
+      const repoData = batchRepoDataMap[item.url]
       const { finalUrl, payloadVersion } = resolveItemVersionPayload(
         item,
         branchSelection,
         batchProvider,
         batchGitBranch,
-        batchSvnMainlineOnly
+        batchSvnMainlineOnly,
+        repoData
       )
 
       setBatchItemStatuses((prev) => ({ ...prev, [item.id]: { status: 'running', error: '' } }))
@@ -1505,7 +1512,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.2.0</span>
+            <span>CodeSync Studio 1.2.1</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>
@@ -1897,6 +1904,13 @@ function BatchSyncPanel({
 }
 
 function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
+  const terminalRef = useRef(null)
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    }
+  }, [progress.logs])
+
   const statusLabel =
     progress.status === 'success' ? '批量完成' :
     progress.status === 'error' ? '存在失败' :
@@ -1963,7 +1977,7 @@ function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
           <span className="terminal-dot green" />
           <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync</span>
         </div>
-        <div className="terminal-output" aria-live="polite">
+        <div className="terminal-output" ref={terminalRef} aria-live="polite">
           {progress.logs.length ? (
             progress.logs.map((line, index) => (
               <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
@@ -2241,6 +2255,13 @@ function RepoSummary({ repo, provider }) {
 }
 
 function TaskPanel({ progress, running, cancelTask, clearLogs }) {
+  const terminalRef = useRef(null)
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    }
+  }, [progress.logs])
+
   const statusLabel = progress.status === 'success' ? '已完成' : progress.status === 'error' ? '失败' : running ? '执行中' : '等待任务'
   const statusClass = progress.status === 'success' ? 'success' : progress.status === 'error' ? 'error' : running ? 'running' : 'idle'
   return (
@@ -2277,7 +2298,7 @@ function TaskPanel({ progress, running, cancelTask, clearLogs }) {
           <span className="terminal-dot green" />
           <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync</span>
         </div>
-        <div className="terminal-output" aria-live="polite">
+        <div className="terminal-output" ref={terminalRef} aria-live="polite">
           {progress.logs.length ? (
             progress.logs.map((line, index) => (
               <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>

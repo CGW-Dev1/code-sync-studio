@@ -1394,7 +1394,10 @@ button:disabled {
 .task-panel {
   display: flex;
   flex-direction: column;
-  min-height: 620px;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Status Pill */
@@ -1589,10 +1592,11 @@ button:disabled {
 }
 
 .terminal-window {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  min-height: 270px;
+  min-height: 200px;
+  max-height: 380px;
   border-radius: var(--radius-md);
   background: #0b121e;
   overflow: hidden;
@@ -1618,7 +1622,9 @@ button:disabled {
 .terminal-dot.green { background: #10b981; }
 
 .terminal-output {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
   padding: 10px 12px;
   overflow-y: auto;
   font-family: var(--font-mono);
