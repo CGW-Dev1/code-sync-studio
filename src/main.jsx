@@ -463,7 +463,7 @@ function App() {
               ? { kind: 'path', name: selectedPath, label: `目录 ${selectedPath} · r${selectedVersion.revision || 'HEAD'}` }
               : {})
         }
-      : { ...selectedVersion, name: selectedVersion.name || 'HEAD' }
+      : { ...selectedVersion, name: selectedVersion.name && selectedVersion.name !== 'HEAD' ? selectedVersion.name : '' }
     setRunning(true)
     setProgress({ ...blankProgress, status: 'running', label: action === 'pull' ? '正在启动拉取...' : '正在启动更新...' })
     try {
@@ -631,8 +631,9 @@ function App() {
           finalUrl = item.url
         }
 
+        const targetBranch = batchGitBranch.trim()
         const payloadVersion = batchProvider === 'git'
-          ? { kind: 'branch', name: batchGitBranch.trim() || 'HEAD', label: batchGitBranch.trim() || '默认分支' }
+          ? { kind: 'branch', name: targetBranch, label: targetBranch || '默认分支' }
           : { kind: 'svn', revision: 'HEAD', sourceUrl: finalUrl, label: 'HEAD' }
 
         await api.runTask({
@@ -1221,7 +1222,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.0.11</span>
+            <span>CodeSync Studio 1.0.12</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>

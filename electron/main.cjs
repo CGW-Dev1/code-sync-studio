@@ -585,25 +585,27 @@ async function runTask(payload) {
   try {
     if (provider === 'git' && action === 'pull') {
       if (sparsePath) {
-        const label = `克隆 Git ${version?.name || '默认版本'}（仅 ${sparsePath}）`
+        const branchName = typeof version?.name === 'string' ? version.name.trim() : ''
+        const label = `克隆 Git ${branchName && branchName !== 'HEAD' ? branchName : '默认版本'}（仅 ${sparsePath}）`
         const sparseArgs = ['clone', '--progress', '--filter=blob:none', '--sparse']
-        if (version?.name && version.name !== 'HEAD') sparseArgs.push('--branch', version.name)
+        if (branchName && branchName !== 'HEAD') sparseArgs.push('--branch', branchName)
         sparseArgs.push(url, target)
         try {
           await runStep(jobId, label, 'git', sparseArgs, undefined, 4, 72)
         } catch {
           if (fs.existsSync(target)) { try { fs.rmSync(target, { recursive: true, force: true }) } catch {} }
           const plainArgs = ['clone', '--progress', '--sparse']
-          if (version?.name && version.name !== 'HEAD') plainArgs.push('--branch', version.name)
+          if (branchName && branchName !== 'HEAD') plainArgs.push('--branch', branchName)
           plainArgs.push(url, target)
           await runStep(jobId, `${label}（服务器不支持部分克隆，已切换兼容模式）`, 'git', plainArgs, undefined, 4, 72)
         }
         await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 78, 96)
       } else {
         const args = ['clone', '--progress']
-        if (version?.name) args.push('--branch', version.name)
+        const branchName = typeof version?.name === 'string' ? version.name.trim() : ''
+        if (branchName && branchName !== 'HEAD') args.push('--branch', branchName)
         args.push(url, target)
-        await runStep(jobId, `克隆 Git ${version?.name || '默认版本'}`, 'git', args, undefined, 4, 92)
+        await runStep(jobId, `克隆 Git ${branchName && branchName !== 'HEAD' ? branchName : '默认版本'}`, 'git', args, undefined, 4, 92)
       }
     } else if (provider === 'git') {
       if (version?.kind === 'tag') {
