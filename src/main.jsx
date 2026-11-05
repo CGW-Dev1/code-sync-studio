@@ -1114,56 +1114,61 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-row">
-          <div className="brand-mark"><img src={logoUrl} alt="CodeSync Studio" /></div>
-          <div><strong>CodeSync</strong><span>STUDIO</span></div>
+          <div className="brand-mark" title="CodeSync Studio">
+            <img src={logoUrl} alt="CodeSync Studio" />
+          </div>
         </div>
-        <div className="sidebar-section-label">工作区</div>
+
         <nav className="side-nav">
           <button
             className={`side-nav-item ${mode === 'single' ? 'active' : ''}`}
             onClick={() => setMode('single')}
+            title="单仓代码同步"
           >
-            <HardDriveDownload size={17} />
-            <span>单仓同步</span>
+            <HardDriveDownload size={20} />
+            <span>单仓</span>
           </button>
           <button
             className={`side-nav-item ${mode === 'batch' ? 'active' : ''}`}
             onClick={() => setMode('batch')}
+            title="批量多仓拉取"
           >
-            <Layers size={17} />
-            <span>批量拉取</span>
+            <Layers size={20} />
+            <span>批量</span>
           </button>
           <button
             className="side-nav-item"
             onClick={() => document.getElementById('recent')?.scrollIntoView({ behavior: 'smooth' })}
+            title="最近任务记录"
           >
-            <History size={17} />
-            <span>最近任务</span>
-            <b>{recent.length || ''}</b>
+            <History size={20} />
+            <span>记录</span>
+            {recent.length > 0 && <b>{recent.length}</b>}
           </button>
         </nav>
-        <div className="sidebar-section-label tools-label">本机工具</div>
-        <div className="tool-check">
-          <span className="tool-icon git-icon"><GitBranch size={15} /></span>
-          <span>Git</span>
-          <i className={gitReady ? 'online-dot' : 'offline-dot'} />
-          <small>{toolStatus?.git?.version ? toolStatus.git.version.replace(/^git version /, 'v') : '检测中'}</small>
-        </div>
-        <div className="tool-check">
-          <span className="tool-icon svn-icon"><Server size={15} /></span>
-          <span>SVN</span>
-          <i className={svnReady ? 'online-dot' : 'offline-dot'} />
-          <small>{toolStatus?.svn?.version ? toolStatus.svn.version.replace(/^svn, version /, 'v').split(' ')[0] : '检测中'}</small>
-        </div>
-        <div className="sidebar-footer">
-          <button className="side-nav-item" onClick={openCredentialSettings} disabled={credentialLoading}>
-            <Settings2 size={16} />
-            <span>连接设置</span>
-          </button>
-          <div className="safe-note">
-            <CheckCircle2 size={15} />
-            <span>命令在本机执行<br />凭据不会上传</span>
+
+        <div className="sidebar-tools-group">
+          <div className={`tool-badge-pill ${gitReady ? 'online' : 'offline'}`} title={`Git ${toolStatus?.git?.version || '检测中'}`}>
+            <i />
+            <span>Git</span>
           </div>
+          <div className={`tool-badge-pill ${svnReady ? 'online' : 'offline'}`} title={`SVN ${toolStatus?.svn?.version || '检测中'}`}>
+            <i />
+            <span>SVN</span>
+          </div>
+        </div>
+
+        <div className="sidebar-footer">
+          <button
+            className="side-nav-item"
+            onClick={openCredentialSettings}
+            disabled={credentialLoading}
+            title="连接与凭据设置"
+          >
+            <Settings2 size={20} />
+            <span>设置</span>
+          </button>
+          <div className="profile" title="操作员: 李四 (CGW-Dev1)">CS</div>
         </div>
       </aside>
 
@@ -1500,7 +1505,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.1.0</span>
+            <span>CodeSync Studio 1.2.0</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>
