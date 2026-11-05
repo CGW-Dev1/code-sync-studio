@@ -2,7 +2,7 @@
 
 > 现代化 Git 与 SVN 仓库拉取、增量同步与多源代码管理桌面工具。
 
-![CodeSync Studio Icon](assets/codesync-sakura.svg)
+![CodeSync Studio Icon](assets/codesync-logo.svg)
 
 ## 📖 项目简介
 
@@ -16,7 +16,7 @@
 - **安全凭据存储**：使用操作系统底层安全存储机制（Electron SafeStorage / Windows DPAPI），安全加密保存 HTTPS Token、SSH 密钥密码及 SVN 凭据。
 - **分支与标签切换**：便捷切换目标分支或 Tag，自动管理拉取进度。
 - **实时任务进度与日志**：可视化展示拉取阶段、百分比进度与命令行实时输出。
-- **现代化 UI**：清爽的樱花主题界面，支持单仓同步与批量拉取双模式无缝切换。
+- **现代化浅蓝色卡片 UI**：全新设计的浅天蓝现代卡片视觉体系、全新流线型同步科技 Logo、精致的 macOS 质感终端视窗与合理的模块间距，支持单仓同步与批量拉取双模式无缝切换。
 
 ---
 

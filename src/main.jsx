@@ -39,7 +39,7 @@ import {
   Zap
 } from 'lucide-react'
 import './styles.css'
-import logoUrl from '../assets/codesync-sakura.svg'
+import logoUrl from '../assets/codesync-logo.svg'
 
 const api = window.codeSync
 
@@ -1500,7 +1500,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.0.16</span>
+            <span>CodeSync Studio 1.1.0</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>
@@ -1951,21 +1951,29 @@ function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
         <button onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
       </div>
 
-      <div className="terminal-output" aria-live="polite">
-        {progress.logs.length ? (
-          progress.logs.map((line, index) => (
-            <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
-              <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
-              <span>{line.text}</span>
+      <div className="terminal-window">
+        <div className="terminal-header-dots">
+          <span className="terminal-dot red" />
+          <span className="terminal-dot yellow" />
+          <span className="terminal-dot green" />
+          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync</span>
+        </div>
+        <div className="terminal-output" aria-live="polite">
+          {progress.logs.length ? (
+            progress.logs.map((line, index) => (
+              <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
+                <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
+                <span>{line.text}</span>
+              </div>
+            ))
+          ) : (
+            <div className="terminal-placeholder">
+              <Terminal size={22} />
+              <span>等待批量任务启动...</span>
+              <small>每个仓库的拉取命令输出会在这里实时滚动</small>
             </div>
-          ))
-        ) : (
-          <div className="terminal-placeholder">
-            <Terminal size={20} />
-            <span>等待批量任务启动...</span>
-            <small>每个仓库的拉取输出会在这里实时滚动</small>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="task-bottom">
@@ -2257,21 +2265,29 @@ function TaskPanel({ progress, running, cancelTask, clearLogs }) {
         <span><Terminal size={14} />命令输出</span>
         <button onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
       </div>
-      <div className="terminal-output" aria-live="polite">
-        {progress.logs.length ? (
-          progress.logs.map((line, index) => (
-            <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
-              <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
-              <span>{line.text}</span>
+      <div className="terminal-window">
+        <div className="terminal-header-dots">
+          <span className="terminal-dot red" />
+          <span className="terminal-dot yellow" />
+          <span className="terminal-dot green" />
+          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync</span>
+        </div>
+        <div className="terminal-output" aria-live="polite">
+          {progress.logs.length ? (
+            progress.logs.map((line, index) => (
+              <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
+                <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
+                <span>{line.text}</span>
+              </div>
+            ))
+          ) : (
+            <div className="terminal-placeholder">
+              <Terminal size={22} />
+              <span>等待任务启动...</span>
+              <small>Git 和 SVN 的详细输出会在这里实时滚动</small>
             </div>
-          ))
-        ) : (
-          <div className="terminal-placeholder">
-            <Terminal size={20} />
-            <span>等待任务启动...</span>
-            <small>Git 和 SVN 的详细输出会在这里实时滚动</small>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       <div className="task-bottom">
         <span><Zap size={13} />命令行输出已连接</span>
