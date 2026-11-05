@@ -613,16 +613,30 @@ async function runTask(payload) {
         if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 72, 80)
         await runStep(jobId, `切换到标签 ${version.name}`, 'git', ['-C', target, 'checkout', '--detach', `refs/tags/${version.name}`], target, 82, 96)
       } else {
-        let branch = version?.name || 'HEAD'
-        if (branch === 'HEAD') {
-          const currentBranch = await capture('git', ['-C', target, 'branch', '--show-current'], target).catch(() => ({ stdout: '' }))
-          branch = currentBranch.stdout.trim() || 'HEAD'
-        }
+        const branchResult = await capture('git', ['-C', target, 'branch', '--show-current'], target).catch(() => ({ stdout: '' }))
+        const currentBranch = branchResult.stdout.trim()
+        let branch = version?.name && version.name !== 'HEAD' ? version.name.trim() : ''
+
         const fetchArgs = ['-C', target, 'fetch', '--progress', '--prune', 'origin']
-        if (branch !== 'HEAD') fetchArgs.push(branch)
-        await runStep(jobId, `获取分支 ${branch}`, 'git', fetchArgs, target, 4, 55)
-        if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 57, 68)
-        if (branch !== 'HEAD') await runStep(jobId, `更新分支 ${branch}`, 'git', ['-C', target, 'pull', '--progress', '--ff-only', 'origin', branch], target, 70, 96)
+        if (branch) fetchArgs.push(branch)
+        await runStep(jobId, `获取分支 ${branch || currentBranch || '最新提交'}`, 'git', fetchArgs, target, 4, 50)
+
+        if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 52, 65)
+
+        if (branch && currentBranch && branch !== currentBranch) {
+          try {
+            await runStep(jobId, `切换分支至 ${branch}`, 'git', ['-C', target, 'checkout', branch], target, 66, 75)
+          } catch {
+            await runStep(jobId, `检出远程分支 ${branch}`, 'git', ['-C', target, 'checkout', '-B', branch, `origin/${branch}`], target, 66, 75)
+          }
+        }
+
+        const activeBranch = branch || currentBranch
+        if (activeBranch) {
+          await runStep(jobId, `更新分支 ${activeBranch}`, 'git', ['-C', target, 'pull', '--progress', '--ff-only', 'origin', activeBranch], target, 76, 96)
+        } else {
+          await runStep(jobId, '更新工作副本', 'git', ['-C', target, 'pull', '--progress', '--ff-only'], target, 76, 96)
+        }
       }
     } else if (provider === 'svn' && action === 'pull') {
       const args = ['checkout', svnUrl]

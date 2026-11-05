@@ -97,14 +97,56 @@ function extractRepoName(rawUrl, provider) {
   return 'svn-repo'
 }
 
+function parseSingleLine(rawLine, provider) {
+  let line = String(rawLine || '').trim()
+  if (!line || line.startsWith('#') || line.startsWith('//')) return null
+
+  let url = ''
+  let branch = ''
+
+  const spaceParts = line.split(/\s+/)
+  if (spaceParts.length >= 2) {
+    url = spaceParts[0].trim()
+    branch = spaceParts.slice(1).join(' ').trim()
+  } else {
+    const hashIndex = line.indexOf('#')
+    if (hashIndex > 0) {
+      url = line.slice(0, hashIndex).trim()
+      branch = line.slice(hashIndex + 1).trim()
+    } else {
+      let atIndex = -1
+      if (line.startsWith('git@')) {
+        atIndex = line.indexOf('@', 4)
+      } else {
+        const protoIndex = line.indexOf('://')
+        if (protoIndex >= 0) {
+          atIndex = line.indexOf('@', protoIndex + 3)
+        } else {
+          atIndex = line.lastIndexOf('@')
+        }
+      }
+
+      if (atIndex > 0 && atIndex < line.length - 1) {
+        url = line.slice(0, atIndex).trim()
+        branch = line.slice(atIndex + 1).trim()
+      } else {
+        url = line
+        branch = ''
+      }
+    }
+  }
+
+  return { url, branch }
+}
+
 function parseUrlList(text, provider, targetRoot) {
   const lines = String(text || '').split(/\r?\n/)
   const items = []
   const seen = new Set()
   lines.forEach((line, index) => {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) return
-    const name = extractRepoName(trimmed, provider) || `repo_${index + 1}`
+    const parsed = parseSingleLine(line, provider)
+    if (!parsed || !parsed.url) return
+    const name = extractRepoName(parsed.url, provider) || `repo_${index + 1}`
     let finalName = name
     let counter = 1
     while (seen.has(finalName)) {
@@ -114,8 +156,9 @@ function parseUrlList(text, provider, targetRoot) {
     seen.add(finalName)
     const target = targetRoot ? joinLocalPath(targetRoot, finalName) : finalName
     items.push({
-      id: `item-${index}-${trimmed}`,
-      url: trimmed,
+      id: `item-${index}-${parsed.url}`,
+      url: parsed.url,
+      parsedBranch: parsed.branch,
       name: finalName,
       target
     })
@@ -219,6 +262,27 @@ function App() {
 
   const batchRunningRef = useRef(false)
   const cancelBatchRef = useRef(false)
+  const [itemBranchOverrides, setItemBranchOverrides] = useState({})
+
+  const handleItemBranchChange = (itemId, val) => {
+    setItemBranchOverrides((prev) => ({
+      ...prev,
+      [itemId]: val
+    }))
+  }
+
+  const handleApplyGlobalBranch = () => {
+    const branch = batchGitBranch.trim()
+    if (!branch) return showToast('请先输入要应用的全局分支名')
+    setItemBranchOverrides((prev) => {
+      const next = { ...prev }
+      batchItems.forEach((item) => {
+        next[item.id] = branch
+      })
+      return next
+    })
+    showToast(`已将分支 "${branch}" 应用到全部项目`)
+  }
 
   // 存储批量输入
   const handleSetBatchGitUrls = (val) => {
@@ -606,9 +670,46 @@ function App() {
         }
       }
 
+      const customBranch = itemBranchOverrides[item.id] !== undefined
+        ? itemBranchOverrides[item.id]
+        : item.parsedBranch
+
+      const targetBranch = (customBranch || (batchProvider === 'git' ? batchGitBranch : '')).trim()
+
+      let payloadVersion
+      let finalUrl = item.url
+      if (batchProvider === 'git') {
+        const branchName = targetBranch && targetBranch !== 'HEAD' ? targetBranch : ''
+        payloadVersion = {
+          kind: 'branch',
+          name: branchName,
+          label: branchName || '默认分支'
+        }
+      } else {
+        const isRevision = /^(?:r)?\d+$/i.test(targetBranch)
+        const revNum = isRevision ? targetBranch.replace(/^r/i, '') : 'HEAD'
+        if (targetBranch && !isRevision) {
+          if (isTrunkUrl(item.url)) {
+            finalUrl = `${item.url.replace(/\/trunk\/?$/i, '')}/${targetBranch.replace(/^\/+/, '')}`
+          } else {
+            finalUrl = joinSvnUrl(item.url, targetBranch)
+          }
+        } else if (batchSvnMainlineOnly && isTrunkUrl(item.url)) {
+          finalUrl = item.url
+        }
+
+        payloadVersion = {
+          kind: 'svn',
+          revision: revNum,
+          sourceUrl: finalUrl,
+          label: isRevision ? `r${revNum}` : targetBranch || '最新修订'
+        }
+      }
+
       setBatchItemStatuses((prev) => ({ ...prev, [item.id]: { status: 'running', error: '' } }))
       const actionLabel = taskAction === 'pull' ? '拉取' : '更新'
-      const stepLabel = `[${itemIndex}/${total}] 正在${actionLabel} ${item.name}`
+      const branchDisplay = payloadVersion.label ? `[${payloadVersion.label}]` : '[默认主线]'
+      const stepLabel = `[${itemIndex}/${total}] 正在${actionLabel} ${item.name} ${branchDisplay}`
 
       setBatchProgress((prev) => ({
         ...prev,
@@ -619,23 +720,13 @@ function App() {
           ...prev.logs.slice(-399),
           {
             time: new Date().toISOString(),
-            text: `>>> [${itemIndex}/${total}] 开始${actionLabel} ${item.name} -> ${item.target}`,
+            text: `>>> [${itemIndex}/${total}] 开始${actionLabel} ${item.name} ${branchDisplay} -> ${item.target}`,
             source: 'stdout'
           }
         ]
       }))
 
       try {
-        let finalUrl = item.url
-        if (batchProvider === 'svn' && batchSvnMainlineOnly && isTrunkUrl(item.url)) {
-          finalUrl = item.url
-        }
-
-        const targetBranch = batchGitBranch.trim()
-        const payloadVersion = batchProvider === 'git'
-          ? { kind: 'branch', name: targetBranch, label: targetBranch || '默认分支' }
-          : { kind: 'svn', revision: 'HEAD', sourceUrl: finalUrl, label: 'HEAD' }
-
         await api.runTask({
           provider: batchProvider,
           action: taskAction,
@@ -744,6 +835,7 @@ function App() {
       handleSetBatchSvnUrls('')
     }
     setBatchItemStatuses({})
+    setItemBranchOverrides({})
     showToast('已清空当前链接列表')
   }
 
@@ -1160,6 +1252,9 @@ function App() {
                 setBatchSvnMainlineOnly={setBatchSvnMainlineOnly}
                 batchItems={batchItems}
                 batchItemStatuses={batchItemStatuses}
+                itemBranchOverrides={itemBranchOverrides}
+                onItemBranchChange={handleItemBranchChange}
+                onApplyGlobalBranch={handleApplyGlobalBranch}
                 batchRunning={batchRunning}
                 protocolWarning={protocolWarning}
                 onStart={() => runBatchSync(false)}
@@ -1222,7 +1317,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.0.12</span>
+            <span>CodeSync Studio 1.0.13</span>
             <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
           </footer>
         </div>
@@ -1268,6 +1363,9 @@ function BatchSyncPanel({
   setBatchSvnMainlineOnly,
   batchItems,
   batchItemStatuses,
+  itemBranchOverrides,
+  onItemBranchChange,
+  onApplyGlobalBranch,
   batchRunning,
   protocolWarning,
   onStart,
@@ -1315,7 +1413,7 @@ function BatchSyncPanel({
           <label className="field-title" htmlFor="batch-urls-input">
             {batchProvider === 'git' ? 'Git 仓库链接列表' : 'SVN 仓库链接列表'}
           </label>
-          <span>一行一个链接 · 已解析 {batchItems.length} 个</span>
+          <span>一行一个链接 · 可跟空格或 @ 指定分支/版本 · 已解析 {batchItems.length} 个</span>
         </div>
         <div className="batch-textarea-wrap">
           <textarea
@@ -1326,8 +1424,8 @@ function BatchSyncPanel({
             disabled={batchRunning}
             placeholder={
               batchProvider === 'git'
-                ? `每行输入一个 Git 仓库链接，例如：\nhttps://github.com/organization/repo-one.git\nhttps://github.com/organization/repo-two.git\ngit@github.com:organization/repo-three.git`
-                : `每行输入一个 SVN 仓库链接，例如：\nhttps://svn.example.com/svn/project-a/trunk\nhttps://svn.example.com/svn/project-b/trunk\nhttps://svn.example.com/svn/project-c`
+                ? `每行输入一个 Git 仓库链接，支持在链接后指定特定分支，例如：\nhttps://github.com/organization/repo-one.git\nhttps://github.com/organization/repo-two.git dev\nhttps://github.com/organization/repo-three.git release-4.0\ngit@github.com:organization/repo-four.git#feature-login`
+                : `每行输入一个 SVN 仓库链接，支持在链接后指定修订号或分支，例如：\nhttps://svn.example.com/svn/project-a/trunk\nhttps://svn.example.com/svn/project-b/trunk 1024\nhttps://svn.example.com/svn/project-c@2048\nhttps://svn.example.com/svn/project-d/branches/v1.0`
             }
           />
         </div>
@@ -1380,7 +1478,18 @@ function BatchSyncPanel({
 
         {batchProvider === 'git' ? (
           <div className="field-group" style={{ marginTop: 0 }}>
-            <label className="field-title" htmlFor="batch-git-branch">指定克隆分支 (可选)</label>
+            <div className="label-row">
+              <label className="field-title" htmlFor="batch-git-branch">全局默认分支 (可选)</label>
+              <button
+                type="button"
+                onClick={onApplyGlobalBranch}
+                disabled={batchRunning || !batchGitBranch.trim()}
+                style={{ fontSize: 9, color: '#a44e70', background: 'transparent', padding: 0 }}
+                title="将此分支应用到下方所有未指定的项目"
+              >
+                应用到全部
+              </button>
+            </div>
             <div className="input-with-icon" style={{ marginTop: 7 }}>
               <GitBranch size={15} />
               <input
@@ -1388,7 +1497,7 @@ function BatchSyncPanel({
                 value={batchGitBranch}
                 onChange={(e) => setBatchGitBranch(e.target.value)}
                 disabled={batchRunning}
-                placeholder="留空拉取远程默认分支"
+                placeholder="未单独指定时使用的默认分支 (留空拉取主线)"
               />
             </div>
           </div>
@@ -1406,7 +1515,7 @@ function BatchSyncPanel({
                 <span className="fake-checkbox"><Check size={12} /></span>
                 <span className="mainline-copy">
                   <b>仅拉取主线 trunk</b>
-                  <small>若链接为根目录自动检出 trunk</small>
+                  <small>若未指定分支且链接包含 trunk 自动检出 trunk</small>
                 </span>
               </label>
             </div>
@@ -1417,8 +1526,15 @@ function BatchSyncPanel({
       {batchItems.length > 0 && (
         <div className="batch-queue-container">
           <div className="batch-queue-header">
-            <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个)</span>
+            <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个，可单独配置每个地址的分支/版本)</span>
             <span style={{ fontSize: 9, color: '#8d7888' }}>按顺序依次执行</span>
+          </div>
+          <div className="batch-queue-col-headers">
+            <span>#</span>
+            <span>仓库名称</span>
+            <span>代码版本 / 分支</span>
+            <span>本地目标目录</span>
+            <span style={{ textAlign: 'center' }}>状态</span>
           </div>
           <div className="batch-queue-list">
             {batchItems.map((item, index) => {
@@ -1430,10 +1546,25 @@ function BatchSyncPanel({
                 statusClass === 'error' ? '失败' :
                 statusClass === 'skipped' ? '跳过' : '等待'
 
+              const currentBranchVal = itemBranchOverrides[item.id] !== undefined
+                ? itemBranchOverrides[item.id]
+                : (item.parsedBranch || '')
+
               return (
                 <div key={item.id} className={`batch-queue-item ${statusClass}`}>
                   <span className="batch-item-index">#{index + 1}</span>
                   <span className="batch-item-name" title={item.name}>{item.name}</span>
+                  <div className="batch-branch-input-wrap">
+                    {batchProvider === 'git' ? <GitBranch size={12} /> : <Server size={12} />}
+                    <input
+                      type="text"
+                      value={currentBranchVal}
+                      onChange={(e) => onItemBranchChange(item.id, e.target.value)}
+                      disabled={batchRunning}
+                      placeholder={batchProvider === 'git' ? (batchGitBranch ? `默认 (${batchGitBranch})` : '默认主线') : '最新修订'}
+                      title={batchProvider === 'git' ? '输入要拉取的目标分支/标签，留空使用默认分支' : '输入要检出的 SVN 修订版本号或分支路径'}
+                    />
+                  </div>
                   <span className="batch-item-target" title={item.target}>{item.target}</span>
                   <span className={`batch-status-badge ${statusClass}`} title={itemState.error || ''}>
                     {statusClass === 'running' && <LoaderCircle size={10} className="spin" />}
@@ -1450,7 +1581,7 @@ function BatchSyncPanel({
 
       <div className="execution-note">
         <Info size={15} />
-        <span>批量拉取按顺序逐个执行，各仓库独立记录状态与错误，遇到网络或凭据问题可一键重试失败项。</span>
+        <span>支持不同链接拉取不同版本：可在文本中以空格/“#”/“@”追加分支，也可直接在上方清单中直接编辑各个仓库的目标分支。</span>
       </div>
 
       <div className="panel-actions">
