@@ -97,22 +97,26 @@ function uploadAsset(uploadUrlTemplate, filePath, assetName, token) {
 async function main() {
   const token = getGitHubToken()
   const repo = 'CGW-Dev1/code-sync-studio'
-  const tag = 'v1.3.0'
-  const title = 'CodeSync Studio v1.3.0'
-  const body = `## CodeSync Studio v1.3.0
+  const tag = 'v1.3.1'
+  const title = 'CodeSync Studio v1.3.1'
+  const body = `## CodeSync Studio v1.3.1
 
-### 🚀 界面与交互全面升级（Cyber-Tech Cockpit）
-- **全新深空科技座舱视觉风格**：重构整体页面布局，采用太空深黑、全息青蓝与霓虹翡翠的沉浸式科技风格，磨砂玻璃层叠卡片与高科技雷达动态状态展示。
-- **单仓与多仓双引擎优化**：
-  - 增强本地已有工作目录自动探测（实时识别分支、最新提交与远端仓库源地址）。
-  - 批量队列支持独立版本选择、单项版本探测、单独拉取/更新与目录一键打开。
-  - 批量版本探测引入并发控制池，避免远端代码平台限流。
-- **遥测终端与进程管理**：终端支持滚动锁定、一键复制日志、仅看错误日志过滤，Windows 任务取消升级为进程树强制终止。
-- **连接设置体验优化**：连接凭据弹窗支持磨砂玻璃遮罩与吸底操作栏，适配多种分辨率显示。
+### 🚀 屏幕视口满屏无滚动布局与高精字型呈现
+- **整屏铺满无需滚动设计**：
+  - 每一个菜单页内容完全自适应铺满整屏窗口视口，杜绝外层页面上下滚动条。
+  - 单仓工作台精简布局，操作按键永久可见，分支/版本探测按需智能呈现，高级选项折叠展开。
+  - 批量引擎左侧配置与开始按键直截了当，右侧支持「待拉取清单 / 实时终端遥测 / 分屏对照」自由一键切换。
+- **第三菜单页独立历史任务归档**：
+  - 侧边栏第三项与顶部导航直接激活「同步记录」专属仪表盘。
+  - 具备全屏检索、Git/SVN 快速筛选、一键重载配置回工作台、本地文件夹直达及一键清空记录。
+- **字体呈现优化（彻底消除马赛克与模糊）**：
+  - 引入 Windows 原生 ClearType 次像素抗锯齿（Subpixel Antialiasing）与高 DPI 渲染支持。
+  - 中文字体首选优化度极高的 \`Microsoft YaHei UI\`，西文选用 \`Cascadia Code\` / \`JetBrains Mono\`。
+  - 全面规范字号层级，中文字符绝不低于 12px，笔画细腻清晰，告别发虚与像素马赛克。
 
 ### 📦 资产下载说明
-- **安装包**：\`CodeSync.Studio.Setup.1.3.0.exe\`（Windows 标准 NSIS 安装向导）
-- **便携版**：\`CodeSync-Studio-1.3.0-portable.zip\`（解压即用免安装版）
+- **安装包**：\`CodeSync.Studio.Setup.1.3.1.exe\`（Windows 标准 NSIS 安装向导）
+- **便携版**：\`CodeSync-Studio-1.3.1-portable.zip\`（解压即用免安装版）
 `
 
   console.log(`Creating GitHub Release ${tag}...`)
@@ -145,18 +149,18 @@ async function main() {
   const uploadUrl = release.upload_url
 
   const installerDir = path.resolve(__dirname, '..', 'release-installer-codesync')
-  const exePath = path.join(installerDir, 'CodeSync Studio Setup 1.3.0.exe')
-  const zipPath = path.join(installerDir, 'CodeSync-Studio-1.3.0-portable.zip')
+  const exePath = path.join(installerDir, 'CodeSync Studio Setup 1.3.1.exe')
+  const zipPath = path.join(installerDir, 'CodeSync-Studio-1.3.1-portable.zip')
 
   if (fs.existsSync(exePath)) {
-    await uploadAsset(uploadUrl, exePath, 'CodeSync.Studio.Setup.1.3.0.exe', token)
+    await uploadAsset(uploadUrl, exePath, 'CodeSync.Studio.Setup.1.3.1.exe', token)
   }
 
   if (fs.existsSync(zipPath)) {
-    await uploadAsset(uploadUrl, zipPath, 'CodeSync-Studio-1.3.0-portable.zip', token)
+    await uploadAsset(uploadUrl, zipPath, 'CodeSync-Studio-1.3.1-portable.zip', token)
   }
 
-  console.log(`\n🎉 Release v1.3.0 has been published successfully!`)
+  console.log(`\n🎉 Release v1.3.1 has been published successfully!`)
   console.log(`URL: ${release.html_url}`)
 }
 
