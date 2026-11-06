@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } = require('electron')
 const { spawn } = require('child_process')
 const crypto = require('crypto')
 const fs = require('fs')
@@ -599,7 +599,8 @@ async function inspectLocal({ target }) {
   try {
     const result = await capture('git', ['-C', target.trim(), 'rev-parse', '--show-toplevel'])
     const branch = await capture('git', ['-C', target.trim(), 'branch', '--show-current']).catch(() => ({ stdout: '' }))
-    return { provider: 'git', root: result.stdout.trim(), branch: branch.stdout.trim() }
+    const remote = await capture('git', ['-C', target.trim(), 'config', '--get', 'remote.origin.url']).catch(() => ({ stdout: '' }))
+    return { provider: 'git', root: result.stdout.trim(), branch: branch.stdout.trim(), url: remote.stdout.trim() }
   } catch {}
   try {
     const result = await capture('svn', ['info', '--xml', target.trim()])
@@ -757,7 +758,7 @@ app.whenReady().then(() => {
     height: 940,
     minWidth: 1080,
     minHeight: 720,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: '#070a13',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: false }
   })
   Menu.setApplicationMenu(null)
@@ -772,6 +773,16 @@ ipcMain.handle('path:choose', async () => {
 ipcMain.handle('path:choose-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], title: '选择 SSH 私钥文件' })
   return result.canceled ? '' : result.filePaths[0]
+})
+ipcMain.handle('path:open', async (_, target) => {
+  if (!target || typeof target !== 'string') return false
+  try {
+    if (fs.existsSync(target)) {
+      await shell.openPath(target)
+      return true
+    }
+  } catch {}
+  return false
 })
 ipcMain.handle('path:check', (_, target) => {
   if (!target || typeof target !== 'string') return { exists: false, isDirectory: false, empty: true }
@@ -798,7 +809,15 @@ ipcMain.handle('repository:inspect', (_, payload) => inspectLocal(payload))
 ipcMain.handle('task:run', (_, payload) => runTask(payload))
 ipcMain.handle('task:cancel', () => {
   if (!activeJob?.child) return false
-  activeJob.child.kill('SIGTERM')
+  try {
+    if (process.platform === 'win32' && activeJob.child.pid) {
+      spawn('taskkill', ['/pid', String(activeJob.child.pid), '/T', '/F'])
+    } else {
+      activeJob.child.kill('SIGTERM')
+    }
+  } catch {
+    try { activeJob.child.kill('SIGKILL') } catch {}
+  }
   return true
 })
 ipcMain.handle('tools:status', async () => ({ git: await toolStatus('git'), svn: await toolStatus('svn') }))

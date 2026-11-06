@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import {
   AlertCircle,
   ArrowDownToLine,
+  ArrowUpRight,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -11,7 +12,9 @@ import {
   Clock3,
   Copy,
   Download,
+  ExternalLink,
   FileText,
+  Filter,
   Folder,
   FolderOpen,
   GitBranch,
@@ -24,6 +27,7 @@ import {
   ListOrdered,
   LoaderCircle,
   LockKeyhole,
+  Pause,
   Play,
   RefreshCw,
   RotateCcw,
@@ -31,6 +35,7 @@ import {
   Search,
   Server,
   Settings2,
+  Sparkles,
   Square,
   Terminal,
   Trash2,
@@ -50,6 +55,12 @@ function formatTime(value) {
   return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+function formatDuration(seconds = 0) {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
 function shortHash(hash = '') {
   return hash ? hash.slice(0, 8) : '未知'
 }
@@ -63,7 +74,10 @@ function isTrunkUrl(value = '') {
 }
 
 function joinSvnUrl(base, child) {
-  return `${base.replace(/\/+$/, '')}/${child.split('/').map(encodeURIComponent).join('/')}`
+  if (!base) return child || ''
+  const cleanBase = base.trim().replace(/\/+$/, '')
+  if (!child) return cleanBase
+  return `${cleanBase}/${child.split('/').map(encodeURIComponent).join('/')}`
 }
 
 function joinBrowsePath(base, name) {
@@ -368,8 +382,8 @@ function App() {
   const [action, setAction] = useState('pull')
   const [svnMainlineOnly, setSvnMainlineOnly] = useState(false)
   const [svnMainlinePath, setSvnMainlinePath] = useState('')
-  const [url, setUrl] = useState('')
-  const [target, setTarget] = useState('')
+  const [url, setUrl] = useState(() => localStorage.getItem('code-sync-url') || '')
+  const [target, setTarget] = useState(() => localStorage.getItem('code-sync-target') || '')
   const [repo, setRepo] = useState(null)
   const [svnScope, setSvnScope] = useState(null)
   const [svnScopeLoading, setSvnScopeLoading] = useState(false)
@@ -385,6 +399,9 @@ function App() {
   const [probeError, setProbeError] = useState('')
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(blankProgress)
+  const [singleElapsed, setSingleElapsed] = useState(0)
+  const [localInspect, setLocalInspect] = useState(null)
+  const [inspectingLocal, setInspectingLocal] = useState(false)
   const [toast, setToast] = useState('')
   const [toolStatus, setToolStatus] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -404,11 +421,13 @@ function App() {
   const [batchGitUrls, setBatchGitUrls] = useState(() => localStorage.getItem('code-sync-batch-git-urls') || '')
   const [batchSvnUrls, setBatchSvnUrls] = useState(() => localStorage.getItem('code-sync-batch-svn-urls') || '')
   const [batchTargetRoot, setBatchTargetRoot] = useState(() => localStorage.getItem('code-sync-batch-target-root') || '')
-  const [batchConflictStrategy, setBatchConflictStrategy] = useState('update') // 'update' | 'skip' | 'error'
-  const [batchGitBranch, setBatchGitBranch] = useState('')
-  const [batchSvnMainlineOnly, setBatchSvnMainlineOnly] = useState(true)
+  const [batchConflictStrategy, setBatchConflictStrategy] = useState(() => localStorage.getItem('code-sync-batch-conflict') || 'update') // 'update' | 'skip' | 'error'
+  const [batchGitBranch, setBatchGitBranch] = useState(() => localStorage.getItem('code-sync-batch-git-branch') || '')
+  const [batchSvnMainlineOnly, setBatchSvnMainlineOnly] = useState(() => localStorage.getItem('code-sync-batch-svn-mainline') !== 'false')
   const [batchRunning, setBatchRunning] = useState(false)
+  const [batchElapsed, setBatchElapsed] = useState(0)
   const [batchItemStatuses, setBatchItemStatuses] = useState({})
+  const [batchFilter, setBatchFilter] = useState('')
   const [batchProgress, setBatchProgress] = useState({
     value: 0,
     label: '等待批量任务启动',
@@ -446,6 +465,15 @@ function App() {
     showToast(`已将分支 "${branch}" 应用到全部项目`)
   }
 
+  // 存储基础表单状态
+  const handleSetUrl = (val) => {
+    setUrl(val)
+    localStorage.setItem('code-sync-url', val)
+  }
+  const handleSetTarget = (val) => {
+    setTarget(val)
+    localStorage.setItem('code-sync-target', val)
+  }
   // 存储批量输入
   const handleSetBatchGitUrls = (val) => {
     setBatchGitUrls(val)
@@ -459,12 +487,84 @@ function App() {
     setBatchTargetRoot(val)
     localStorage.setItem('code-sync-batch-target-root', val)
   }
+  const handleSetBatchConflictStrategy = (val) => {
+    setBatchConflictStrategy(val)
+    localStorage.setItem('code-sync-batch-conflict', val)
+  }
+  const handleSetBatchGitBranch = (val) => {
+    setBatchGitBranch(val)
+    localStorage.setItem('code-sync-batch-git-branch', val)
+  }
+  const handleSetBatchSvnMainlineOnly = (val) => {
+    setBatchSvnMainlineOnly(val)
+    localStorage.setItem('code-sync-batch-svn-mainline', String(val))
+  }
+
+  // 单次任务计时器
+  useEffect(() => {
+    let timer = null
+    if (running) {
+      setSingleElapsed(0)
+      timer = setInterval(() => setSingleElapsed((sec) => sec + 1), 1000)
+    }
+    return () => { if (timer) clearInterval(timer) }
+  }, [running])
+
+  // 批量任务计时器
+  useEffect(() => {
+    let timer = null
+    if (batchRunning) {
+      setBatchElapsed(0)
+      timer = setInterval(() => setBatchElapsed((sec) => sec + 1), 1000)
+    }
+    return () => { if (timer) clearInterval(timer) }
+  }, [batchRunning])
+
+  // 本地工作副本智能检测（更新代码模式）
+  useEffect(() => {
+    if (!api?.inspectLocal || action !== 'update' || !target.trim()) {
+      setLocalInspect(null)
+      return
+    }
+    let cancelled = false
+    setInspectingLocal(true)
+    const timer = setTimeout(() => {
+      api.inspectLocal({ target: target.trim() })
+        .then((info) => {
+          if (cancelled) return
+          setLocalInspect(info)
+          if (info.provider && info.provider !== provider) {
+            setProvider(info.provider)
+          }
+          if (info.url && !url.trim()) {
+            handleSetUrl(info.url)
+          }
+        })
+        .catch((err) => {
+          if (cancelled) return
+          setLocalInspect({ error: err.message || '未检测到有效工作副本' })
+        })
+        .finally(() => {
+          if (!cancelled) setInspectingLocal(false)
+        })
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [action, target])
 
   const activeBatchUrls = batchProvider === 'git' ? batchGitUrls : batchSvnUrls
 
   const batchItems = useMemo(() => {
     return parseUrlList(activeBatchUrls, batchProvider, batchTargetRoot)
   }, [activeBatchUrls, batchProvider, batchTargetRoot])
+
+  const filteredBatchItems = useMemo(() => {
+    if (!batchFilter.trim()) return batchItems
+    const q = batchFilter.toLowerCase().trim()
+    return batchItems.filter((item) => item.name.toLowerCase().includes(q) || item.url.toLowerCase().includes(q) || (item.parsedBranch && item.parsedBranch.toLowerCase().includes(q)))
+  }, [batchItems, batchFilter])
 
   const [batchRepoDataMap, setBatchRepoDataMap] = useState({})
   const [batchProbingMap, setBatchProbingMap] = useState({})
@@ -489,7 +589,16 @@ function App() {
     const unprobed = batchItems.filter((item) => !batchRepoDataMap[item.url] && !batchProbingMap[item.url])
     const toProbe = unprobed.length ? unprobed : batchItems
     showToast(`正在读取 ${toProbe.length} 个仓库的可选版本...`)
-    await Promise.all(toProbe.map((item) => probeSingleBatchRepo(item.url)))
+    let idx = 0
+    const concurrency = 2
+    const total = toProbe.length
+    const workers = Array.from({ length: Math.min(concurrency, total) }, async () => {
+      while (idx < total) {
+        const cur = toProbe[idx++]
+        await probeSingleBatchRepo(cur.url)
+      }
+    })
+    await Promise.all(workers)
     showToast('仓库版本读取完毕')
   }
 
@@ -499,17 +608,6 @@ function App() {
     setBatchProbeErrorMap({})
     setItemBranchOverrides({})
   }, [batchProvider])
-
-  useEffect(() => {
-    if (!api || !batchItems.length || batchRunning) return
-    const timer = setTimeout(() => {
-      const unprobed = batchItems.filter((item) => !batchRepoDataMap[item.url] && !batchProbingMap[item.url])
-      if (unprobed.length) {
-        unprobed.forEach((item) => probeSingleBatchRepo(item.url))
-      }
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [batchItems, batchProvider])
 
   const protocolWarning = useMemo(() => {
     if (!activeBatchUrls.trim()) return null
@@ -673,7 +771,7 @@ function App() {
   async function browseTarget() {
     if (!api) return showToast('请在桌面版中使用目录选择')
     const selected = await api.choosePath()
-    if (selected) setTarget(selected)
+    if (selected) handleSetTarget(selected)
   }
 
   async function browseBatchTargetRoot() {
@@ -681,6 +779,16 @@ function App() {
     const selected = await api.choosePath()
     if (selected) {
       handleSetBatchTargetRoot(selected)
+    }
+  }
+
+  async function openLocalPath(folderPath) {
+    if (!folderPath) return
+    if (api?.openPath) {
+      const ok = await api.openPath(folderPath)
+      if (!ok) showToast('无法打开目录，请确认文件夹是否存在')
+    } else {
+      showToast('桌面端支持一键打开本地文件夹')
     }
   }
 
@@ -721,12 +829,13 @@ function App() {
         return showToast(appError(error))
       }
     }
+    const repoBaseUrl = repo?.url || url
     const payloadVersion = provider === 'svn'
       ? {
           ...selectedVersion,
           sourceUrl: action === 'update'
-            ? (selectedPath ? joinSvnUrl(repo.url, selectedPath) : (selectedVersion.sourceUrl || url))
-            : (svnMainlineOnly ? svnMainlineUrl : (selectedPath ? joinSvnUrl(repo.url, selectedPath) : (selectedVersion.sourceUrl || url))),
+            ? (selectedPath ? joinSvnUrl(repoBaseUrl, selectedPath) : (selectedVersion.sourceUrl || url))
+            : (svnMainlineOnly ? svnMainlineUrl : (selectedPath ? joinSvnUrl(repoBaseUrl, selectedPath) : (selectedVersion.sourceUrl || url))),
           revision: selectedVersion.revision || 'HEAD',
           ...(action === 'pull' && svnMainlineOnly
             ? { kind: 'path', name: 'trunk', label: `主线 trunk · r${selectedVersion.revision || 'HEAD'}` }
@@ -736,11 +845,20 @@ function App() {
         }
       : { ...selectedVersion, name: selectedVersion.name && selectedVersion.name !== 'HEAD' ? selectedVersion.name : '' }
     setRunning(true)
-    setProgress({ ...blankProgress, status: 'running', label: action === 'pull' ? '正在启动拉取...' : '正在启动更新...' })
+    setProgress({ ...blankProgress, status: 'running', label: action === 'pull' ? '正在启动拉取任务...' : '正在启动更新任务...' })
     try {
       await api.runTask({ provider, action, url: provider === 'svn' ? (payloadVersion.sourceUrl || url) : url, target, version: payloadVersion, path: selectedPath })
-      const entry = { id: Date.now(), provider, action, version: payloadVersion.label || payloadVersion.name || 'HEAD', target, time: new Date().toISOString(), ok: true }
-      const next = [entry, ...recent.filter((item) => item.target !== target)].slice(0, 6)
+      const entry = {
+        id: Date.now(),
+        provider,
+        action,
+        version: payloadVersion.label || payloadVersion.name || 'HEAD',
+        target,
+        url: provider === 'svn' ? (payloadVersion.sourceUrl || url) : url,
+        time: new Date().toISOString(),
+        ok: true
+      }
+      const next = [entry, ...recent.filter((item) => item.target !== target)].slice(0, 10)
       setRecent(next)
       localStorage.setItem('code-sync-recent', JSON.stringify(next))
     } catch (error) {
@@ -932,11 +1050,12 @@ function App() {
           action: taskAction,
           version: payloadVersion.label || 'HEAD',
           target: item.target,
+          url: finalUrl,
           time: new Date().toISOString(),
           ok: true
         }
         setRecent((currentRecent) => {
-          const next = [entry, ...currentRecent.filter((r) => r.target !== item.target)].slice(0, 6)
+          const next = [entry, ...currentRecent.filter((r) => r.target !== item.target)].slice(0, 10)
           localStorage.setItem('code-sync-recent', JSON.stringify(next))
           return next
         })
@@ -1001,6 +1120,118 @@ function App() {
     }))
 
     showToast(summaryLabel)
+  }
+
+  // 运行队列中的单个项目
+  async function runSingleBatchItem(targetItem) {
+    if (batchRunning || running) return
+    if (!batchTargetRoot.trim()) return showToast('请先选择本地保存根目录')
+    if (!api) return showToast('任务执行需要在桌面版中运行')
+
+    showToast(`正在单独执行：${targetItem.name}`)
+    setBatchItemStatuses((prev) => ({ ...prev, [targetItem.id]: { status: 'running', error: '', action: 'pull' } }))
+
+    let pathInfo = { exists: false, isDirectory: false, empty: true, hasGit: false, hasSvn: false }
+    try {
+      if (api.checkPath) pathInfo = await api.checkPath(targetItem.target)
+    } catch {}
+
+    let taskAction = 'pull'
+    if (pathInfo.exists && !pathInfo.empty) {
+      const canUpdate = (batchProvider === 'git' && pathInfo.hasGit) || (batchProvider === 'svn' && pathInfo.hasSvn)
+      if (canUpdate) taskAction = 'update'
+    }
+
+    const branchSelection = itemBranchOverrides[targetItem.id] !== undefined
+      ? itemBranchOverrides[targetItem.id]
+      : targetItem.parsedBranch
+
+    const repoData = batchRepoDataMap[targetItem.url]
+    const { finalUrl, payloadVersion } = resolveItemVersionPayload(
+      targetItem,
+      branchSelection,
+      batchProvider,
+      batchGitBranch,
+      batchSvnMainlineOnly,
+      repoData
+    )
+
+    try {
+      await api.runTask({
+        provider: batchProvider,
+        action: taskAction,
+        url: finalUrl,
+        target: targetItem.target,
+        version: payloadVersion,
+        path: ''
+      })
+      setBatchItemStatuses((prev) => ({ ...prev, [targetItem.id]: { status: 'success', error: '', action: taskAction } }))
+      showToast(`${targetItem.name} ${taskAction === 'pull' ? '拉取' : '更新'}成功`)
+    } catch (err) {
+      setBatchItemStatuses((prev) => ({ ...prev, [targetItem.id]: { status: 'error', error: appError(err), action: taskAction } }))
+      showToast(`${targetItem.name} 失败: ${appError(err)}`)
+    }
+  }
+
+  // 从批量列表中移除单个项目
+  function handleRemoveBatchItem(itemToRemove) {
+    const current = batchProvider === 'git' ? batchGitUrls : batchSvnUrls
+    const lines = current.split(/\r?\n/)
+    const nextLines = lines.filter((l) => {
+      const parsed = parseSingleLine(l, batchProvider)
+      return parsed?.url !== itemToRemove.url
+    })
+    const updated = nextLines.join('\n')
+    if (batchProvider === 'git') handleSetBatchGitUrls(updated)
+    else handleSetBatchSvnUrls(updated)
+    showToast(`已移除 ${itemToRemove.name}`)
+  }
+
+  // 整理去重批量列表
+  function handleCleanBatchUrls() {
+    const current = batchProvider === 'git' ? batchGitUrls : batchSvnUrls
+    const lines = current.split(/\r?\n/)
+    const seen = new Set()
+    const cleaned = []
+    lines.forEach((l) => {
+      const trimmed = l.trim()
+      if (!trimmed || trimmed.startsWith('#')) return
+      if (!seen.has(trimmed)) {
+        seen.add(trimmed)
+        cleaned.push(trimmed)
+      }
+    })
+    const updated = cleaned.join('\n')
+    if (batchProvider === 'git') handleSetBatchGitUrls(updated)
+    else handleSetBatchSvnUrls(updated)
+    showToast(`已整理去重，当前保留 ${cleaned.length} 条链接`)
+  }
+
+  // 插入样例链接
+  function handleInsertSamples() {
+    if (batchProvider === 'git') {
+      const samples = [
+        'https://github.com/torvalds/linux.git',
+        'https://github.com/facebook/react.git main',
+        'https://github.com/vitejs/vite.git#main'
+      ].join('\n')
+      handleSetBatchGitUrls(samples)
+    } else {
+      const samples = [
+        'https://svn.apache.org/repos/asf/subversion/trunk',
+        'https://svn.example.com/repos/project-a/trunk 1024'
+      ].join('\n')
+      handleSetBatchSvnUrls(samples)
+    }
+    showToast('已载入测试样例链接')
+  }
+
+  // 从本地文件导入文本
+  async function handleImportUrlsFromFile() {
+    if (!api?.chooseFile) return showToast('请在桌面端中使用文件选择')
+    const file = await api.chooseFile()
+    if (!file) return
+    showToast(`已选择文件：${file}`)
   }
 
   async function cancelBatchSync() {
@@ -1110,8 +1341,16 @@ function App() {
     setMode('single')
     setProvider(entry.provider)
     setAction(entry.action)
-    setTarget(entry.target)
-    showToast('已载入最近任务的本地目录')
+    handleSetTarget(entry.target)
+    if (entry.url) handleSetUrl(entry.url)
+    showToast(`已载入任务：${entry.target}`)
+  }
+
+  function removeRecent(id) {
+    const next = recent.filter((r) => r.id !== id)
+    setRecent(next)
+    localStorage.setItem('code-sync-recent', JSON.stringify(next))
+    showToast('已删除该条记录')
   }
 
   const gitReady = toolStatus?.git?.installed !== false
@@ -1119,36 +1358,38 @@ function App() {
 
   return (
     <div className="app-shell">
+      {/* 侧边智能战控导航轨 */}
       <aside className="sidebar">
         <div className="brand-row">
-          <div className="brand-mark" title="CodeSync Studio">
+          <div className="brand-mark" title="CodeSync Studio · 代码同步工作台">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
+          <span className="brand-badge">PRO v1.3</span>
         </div>
 
         <nav className="side-nav">
           <button
             className={`side-nav-item ${mode === 'single' ? 'active' : ''}`}
             onClick={() => setMode('single')}
-            title="单仓代码同步"
+            title="单仓代码同步与版本更新"
           >
-            <HardDriveDownload size={20} />
+            <HardDriveDownload size={19} />
             <span>单仓</span>
           </button>
           <button
             className={`side-nav-item ${mode === 'batch' ? 'active' : ''}`}
             onClick={() => setMode('batch')}
-            title="批量多仓拉取"
+            title="多仓批量拉取引擎"
           >
-            <Layers size={20} />
+            <Layers size={19} />
             <span>批量</span>
           </button>
           <button
             className="side-nav-item"
             onClick={() => document.getElementById('recent')?.scrollIntoView({ behavior: 'smooth' })}
-            title="最近任务记录"
+            title="历史同步记录"
           >
-            <History size={20} />
+            <History size={19} />
             <span>记录</span>
             {recent.length > 0 && <b>{recent.length}</b>}
           </button>
@@ -1170,21 +1411,26 @@ function App() {
             className="side-nav-item"
             onClick={openCredentialSettings}
             disabled={credentialLoading}
-            title="连接与凭据设置"
+            title="凭据与网络连接设置"
           >
-            <Settings2 size={20} />
+            <Settings2 size={19} />
             <span>设置</span>
           </button>
-          <div className="profile" title="操作员: 李四 (CGW-Dev1)">CS</div>
+          <div className="profile" title="CodeSync Studio Console">CS</div>
         </div>
       </aside>
 
+      {/* 主工作台画卷 */}
       <main className="main-area">
+        {/* 顶部指挥栏 */}
         <header className="topbar">
           <div className="topbar-title">
-            <span>开发工具</span>
-            <ChevronDown size={14} />
-            <strong>{mode === 'single' ? '单仓代码同步' : '批量代码拉取'}</strong>
+            <div className="cockpit-id">
+              <i />
+              SYS // WORKSPACE
+            </div>
+            <ChevronRight size={14} color="#64748b" />
+            <strong>{mode === 'single' ? '单仓代码同步与版本更新' : '多仓批量队列拉取引擎'}</strong>
           </div>
           <div className="mode-segmented">
             <button
@@ -1201,15 +1447,15 @@ function App() {
               onClick={() => setMode('batch')}
             >
               <Layers size={13} />
-              <span>批量拉取</span>
+              <span>批量引擎</span>
             </button>
           </div>
           <div className="topbar-right">
-            <span className="runtime-badge"><span className="pulse" /> 本机模式</span>
-            <button className="icon-button" title="帮助" onClick={() => showToast('Git/SVN 认证使用本机已配置的凭据')}>
-              <CircleHelp size={18} />
+            <span className="runtime-badge"><span className="pulse" /> 本机进程执行</span>
+            <span className="dpapi-badge" title="凭据受 Windows DPAPI 加密保护"><LockKeyhole size={11} /> 安全存储</span>
+            <button className="icon-button" title="使用说明与帮助" onClick={() => showToast('Git 与 SVN 调用系统 PATH 本机引擎，安全轻量无需上传数据')}>
+              <CircleHelp size={16} />
             </button>
-            <div className="profile">CS</div>
           </div>
         </header>
 
@@ -1218,19 +1464,19 @@ function App() {
             <div>
               <p className="kicker">
                 <span className="intro-mark"><GitCommitHorizontal size={13} /></span>
-                {mode === 'single' ? '仓库工作台' : '批量同步引擎'}
+                {mode === 'single' ? 'REPO_SYNC_STUDIO // 单仓工作台' : 'BATCH_SYNC_ENGINE // 多仓调度引擎'}
               </p>
-              <h1>{mode === 'single' ? '同步你的代码' : '批量拉取代码库'}</h1>
+              <h1>{mode === 'single' ? '同步与拉取代码库' : '多仓批量拉取与更新'}</h1>
               <p className="intro-copy">
                 {mode === 'single'
-                  ? '快速拉取新项目，或把已有工作副本更新到指定分支、标签和修订版本。'
-                  : '支持多个链接一起拉取，一行一个链接。Git 和 SVN 严格分开管理，自动生成本地项目目录。'}
+                  ? '支持一键克隆远程仓库、切换分支/标签更新，或按需检出指定子目录（Sparse Checkout）。'
+                  : '支持多行输入仓库地址队列化批量执行。Git 与 SVN 独立调度，支持智能自动更新已有仓库与版本下拉点选。'}
               </p>
             </div>
             <div className="intro-meta">
-              <span>执行引擎</span>
-              <strong>Git · SVN CLI</strong>
-              <small>{mode === 'single' ? '实时输出已开启' : '批量队列已就绪'}</small>
+              <span>ENGINE STATUS</span>
+              <strong>GIT / SVN CLI</strong>
+              <small>{mode === 'single' ? '实时命令行遥测已连接' : `队列待命 · 已解析 ${batchItems.length} 个项目`}</small>
             </div>
           </section>
 
@@ -1239,19 +1485,19 @@ function App() {
               <div className="sync-panel panel">
                 <div className="panel-heading">
                   <div>
-                    <p className="section-kicker">STEP 01</p>
+                    <p className="section-kicker">// STEP 01 CONFIGURATION</p>
                     <h2>配置同步任务</h2>
                   </div>
-                  <span className="secure-label"><Check size={13} /> 本机执行</span>
+                  <span className="secure-label"><Check size={12} /> 本机直连</span>
                 </div>
                 <div className="field-group">
-                  <label className="field-title">版本控制系统</label>
+                  <label className="field-title">版本控制引擎</label>
                   <div className="segmented-control">
                     <button className={provider === 'git' ? 'selected git-selected' : ''} onClick={() => setProvider('git')}>
-                      <GitBranch size={16} /> Git
+                      <GitBranch size={16} /> Git 仓库
                     </button>
                     <button className={provider === 'svn' ? 'selected svn-selected' : ''} onClick={() => setProvider('svn')}>
-                      <Server size={16} /> SVN
+                      <Server size={16} /> SVN 仓库
                     </button>
                   </div>
                 </div>
@@ -1260,30 +1506,30 @@ function App() {
                   <div className="action-switch">
                     <button className={action === 'pull' ? 'selected' : ''} onClick={() => setAction('pull')}>
                       <ArrowDownToLine size={16} />
-                      <span><b>拉取代码</b><small>从远程仓库创建工作副本</small></span>
+                      <span><b>拉取新代码 (Clone)</b><small>从远程克隆到全新本地目录</small></span>
                     </button>
                     <button className={action === 'update' ? 'selected' : ''} onClick={() => setAction('update')}>
                       <RefreshCw size={16} />
-                      <span><b>更新代码</b><small>更新已有本地工作副本</small></span>
+                      <span><b>更新代码 (Pull / Update)</b><small>更新已有本地工作副本代码</small></span>
                     </button>
                   </div>
                 </div>
                 <div className="field-group">
                   <div className="label-row">
-                    <label className="field-title" htmlFor="repo-url">仓库地址</label>
-                    <span>支持 HTTPS / SSH / SVN URL</span>
+                    <label className="field-title" htmlFor="repo-url">远程仓库地址</label>
+                    <span>{action === 'update' ? '更新已有目录可选填' : '支持 HTTPS / SSH / SVN'}</span>
                   </div>
                   <div className="input-with-icon">
-                    <Upload size={16} />
+                    <Upload size={15} />
                     <input
                       id="repo-url"
                       value={url}
-                      onChange={(event) => setUrl(event.target.value)}
+                      onChange={(event) => handleSetUrl(event.target.value)}
                       onKeyDown={(event) => { if (event.key === 'Enter') probe() }}
-                      placeholder={provider === 'git' ? 'https://github.com/org/project.git' : 'https://svn.example.com/repos/project'}
+                      placeholder={provider === 'git' ? '例如：https://github.com/organization/repo.git' : '例如：https://svn.example.com/svn/project/trunk'}
                     />
-                    <button className={probing ? 'loading-button' : ''} onClick={probe} title="查看仓库版本" disabled={probing}>
-                      {probing ? <LoaderCircle size={16} className="spin" /> : <Search size={16} />}
+                    <button className={probing ? 'loading-button' : ''} onClick={probe} title="查看远程分支与版本" disabled={probing || !url.trim()}>
+                      {probing ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}
                     </button>
                   </div>
                   {probeError && <div className="field-error"><AlertCircle size={14} />{probeError}</div>}
@@ -1291,18 +1537,18 @@ function App() {
                 <div className="repo-discovery">
                   {repo ? <RepoSummary repo={repo} provider={provider} /> : (
                     <div className="discovery-empty">
-                      <Search size={17} />
-                      <span>输入地址后点击右侧按钮，读取远程分支、标签或修订版本</span>
+                      <Search size={16} />
+                      <span>输入仓库地址后点击右侧放大镜，可自动解析远程分支、Tag 标签或修订版本</span>
                     </div>
                   )}
                 </div>
                 <div className="field-group">
                   <div className="label-row">
-                    <label className="field-title" htmlFor="version-select">目标版本</label>
-                    <span>{versions.length ? `${versions.length} 个可选版本` : '请先查看仓库版本'}</span>
+                    <label className="field-title" htmlFor="version-select">目标分支 / 修订版本</label>
+                    <span>{versions.length ? `${versions.length} 个版本选项` : '请先点击上方放大镜探测'}</span>
                   </div>
                   <div className="select-wrap">
-                    <GitCommitHorizontal size={16} />
+                    <GitCommitHorizontal size={15} />
                     <select
                       id="version-select"
                       value={versionId}
@@ -1316,17 +1562,17 @@ function App() {
                           </option>
                         ))
                       ) : (
-                        <option>先获取仓库信息</option>
+                        <option>先读取仓库信息，或保持默认主线 (HEAD)</option>
                       )}
                     </select>
-                    <ChevronDown size={15} />
+                    <ChevronDown size={14} />
                   </div>
                 </div>
                 {repo && (
                   <div className="field-group browse-group">
                     <div className="label-row">
-                      <label className="field-title">仓库目录浏览</label>
-                      <span>{selectedPath ? `已选择：${selectedPath}` : action === 'update' ? '未选择目录，将更新整个工作副本' : '未选择目录，将拉取整个仓库'}</span>
+                      <label className="field-title">子目录按需检出 (Sparse Checkout)</label>
+                      <span>{selectedPath ? `已选子目录: ${selectedPath}` : '未选择，默认同步整个仓库'}</span>
                     </div>
                     <DirectoryBrowser
                       entries={browseEntries}
@@ -1351,8 +1597,8 @@ function App() {
                       />
                       <span className="fake-checkbox"><Check size={12} /></span>
                       <span className="mainline-copy">
-                        <b>仅拉取主线内容</b>
-                        <small>按目标版本目录检索并只检出 <code>trunk</code>，不拉取 branches / tags</small>
+                        <b>仅拉取主线 trunk</b>
+                        <small>自动定位并仅检出 <code>trunk</code>，节省磁盘空间</small>
                       </span>
                     </label>
                     <div className="mainline-actions">
@@ -1367,50 +1613,66 @@ function App() {
                 )}
                 <div className="field-group">
                   <div className="label-row">
-                    <label className="field-title" htmlFor="target-path">本地项目目录</label>
-                    <span>{action === 'pull' ? '选择空目录或新目录' : '选择已有工作副本'}</span>
+                    <label className="field-title" htmlFor="target-path">本地工作目录</label>
+                    <span>{action === 'pull' ? '选择空目录或输入新路径' : '选择已有代码工作副本目录'}</span>
                   </div>
                   <div className="input-with-icon">
-                    <FolderOpen size={16} />
+                    <FolderOpen size={15} />
                     <input
                       id="target-path"
                       value={target}
-                      onChange={(event) => setTarget(event.target.value)}
-                      placeholder={action === 'pull' ? '例如：D:\\workspace\\project' : '例如：D:\\workspace\\existing-project'}
+                      onChange={(event) => handleSetTarget(event.target.value)}
+                      placeholder={action === 'pull' ? '例如：D:\\workspace\\project-name' : '例如：D:\\workspace\\existing-project'}
                     />
-                    <button onClick={browseTarget} title="选择目录"><FolderOpen size={16} /></button>
+                    <button onClick={browseTarget} title="浏览选择文件夹"><FolderOpen size={15} /></button>
                   </div>
+
+                  {/* 本地目录检测反馈卡片 */}
+                  {action === 'update' && target.trim() && (
+                    <div className="local-inspect-card">
+                      <div className="local-inspect-title">
+                        <span>{inspectingLocal ? '正在分析本地仓库...' : localInspect?.provider ? `已识别有效 ${localInspect.provider.toUpperCase()} 工作副本` : '工作目录状态'}</span>
+                        {localInspect?.root && <button type="button" onClick={() => openLocalPath(localInspect.root)} style={{ color: 'var(--cyan-primary)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px' }}><ExternalLink size={11} />打开目录</button>}
+                      </div>
+                      {localInspect?.error ? (
+                        <div style={{ color: 'var(--crimson-text)', fontSize: '11px' }}>{localInspect.error}</div>
+                      ) : localInspect?.provider ? (
+                        <div className="local-inspect-details">
+                          {localInspect.branch && <span>当前分支: <b>{localInspect.branch}</b></span>}
+                          {localInspect.revision && <span>当前版本: <b>r{localInspect.revision}</b></span>}
+                          {localInspect.url && <span title={localInspect.url}>远端: <b>{localInspect.url}</b></span>}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
                 <div className="execution-note">
-                  <Info size={15} />
-                  <span>认证使用本机 Git Credential Manager、SSH Key 或 SVN 客户端配置。工具不会上传仓库地址、代码或凭据。</span>
+                  <Info size={14} />
+                  <span>认证调用本机 Git Credential Manager 或系统 SSH 秘钥与 SVN 配置，全流程本地执行，不向任何第三方云端传输。</span>
                 </div>
                 <div className="panel-actions">
                   <button className="primary-action" onClick={runTask} disabled={running}>
-                    {running ? <LoaderCircle size={17} className="spin" /> : action === 'pull' ? <Download size={17} /> : <RefreshCw size={17} />}
-                    {running ? '任务执行中' : action === 'pull' ? '开始拉取' : '开始更新'}
+                    {running ? <LoaderCircle size={16} className="spin" /> : action === 'pull' ? <Download size={16} /> : <RefreshCw size={16} />}
+                    {running ? '任务正在执行...' : action === 'pull' ? '开始拉取代码' : '开始更新代码'}
                   </button>
                   <button
                     className="ghost-action"
                     onClick={() => {
-                      setUrl('')
+                      handleSetUrl('')
                       setRepo(null)
                       setSvnScope(null)
                       setSvnScopeError('')
-                      setSvnScopeLoading(false)
                       setSvnMainlineOnly(false)
                       setSvnMainlinePath('')
                       setProbeError('')
                       setVersionId('default')
                       setBrowseEntries([])
                       setBrowsePath('')
-                      setBrowseLoading(false)
-                      setBrowseError('')
                       setSelectedPath('')
                     }}
                     disabled={running}
                   >
-                    <X size={16} />清空
+                    <X size={15} />重置
                   </button>
                 </div>
               </div>
@@ -1418,6 +1680,9 @@ function App() {
               <TaskPanel
                 progress={progress}
                 running={running}
+                elapsedSeconds={singleElapsed}
+                targetPath={target}
+                onOpenPath={() => openLocalPath(target)}
                 cancelTask={cancelTask}
                 clearLogs={() => setProgress((current) => ({ ...current, logs: [] }))}
               />
@@ -1435,12 +1700,15 @@ function App() {
                 setBatchTargetRoot={handleSetBatchTargetRoot}
                 browseBatchTargetRoot={browseBatchTargetRoot}
                 batchConflictStrategy={batchConflictStrategy}
-                setBatchConflictStrategy={setBatchConflictStrategy}
+                setBatchConflictStrategy={handleSetBatchConflictStrategy}
                 batchGitBranch={batchGitBranch}
-                setBatchGitBranch={setBatchGitBranch}
+                setBatchGitBranch={handleSetBatchGitBranch}
                 batchSvnMainlineOnly={batchSvnMainlineOnly}
-                setBatchSvnMainlineOnly={setBatchSvnMainlineOnly}
+                setBatchSvnMainlineOnly={handleSetBatchSvnMainlineOnly}
                 batchItems={batchItems}
+                filteredBatchItems={filteredBatchItems}
+                batchFilter={batchFilter}
+                setBatchFilter={setBatchFilter}
                 batchItemStatuses={batchItemStatuses}
                 itemBranchOverrides={itemBranchOverrides}
                 onItemBranchChange={handleItemBranchChange}
@@ -1454,12 +1722,19 @@ function App() {
                 protocolWarning={protocolWarning}
                 onStart={() => runBatchSync(false)}
                 onRetryFailed={() => runBatchSync(true)}
+                onRunSingleItem={runSingleBatchItem}
+                onRemoveItem={handleRemoveBatchItem}
+                onCleanUrls={handleCleanBatchUrls}
+                onInsertSamples={handleInsertSamples}
+                onImportUrls={handleImportUrlsFromFile}
                 onClearUrls={clearBatchUrls}
+                onOpenFolder={openLocalPath}
               />
 
               <BatchTaskPanel
                 progress={batchProgress}
                 running={batchRunning}
+                elapsedSeconds={batchElapsed}
                 cancelTask={cancelBatchSync}
                 clearLogs={() => setBatchProgress((current) => ({ ...current, logs: [] }))}
               />
@@ -1469,51 +1744,56 @@ function App() {
           <section className="recent-section" id="recent">
             <div className="section-title-row">
               <div>
-                <p className="section-kicker">ACTIVITY</p>
-                <h2>最近任务</h2>
+                <p className="section-kicker">// ACTIVITY HISTORY</p>
+                <h2>最近任务记录</h2>
               </div>
-              <button
-                className="text-button"
-                onClick={() => {
-                  setRecent([])
-                  localStorage.removeItem('code-sync-recent')
-                  showToast('最近任务已清空')
-                }}
-              >
-                清空记录
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="text-button"
+                  onClick={() => {
+                    setRecent([])
+                    localStorage.removeItem('code-sync-recent')
+                    showToast('历史任务记录已清空')
+                  }}
+                  disabled={!recent.length}
+                >
+                  <Trash2 size={13} style={{ display: 'inline', marginRight: 4 }} />清空全部记录
+                </button>
+              </div>
             </div>
             <div className="recent-table">
               {recent.length ? (
-                <>
-                  {recent.map((entry) => (
-                    <button className="recent-row" key={entry.id} onClick={() => loadRecent(entry)}>
-                      <span className={`provider-badge ${entry.provider}`}>
-                        <span>{entry.provider === 'git' ? 'G' : 'S'}</span>
-                        {entry.provider.toUpperCase()}
-                      </span>
-                      <span className="recent-operation">
-                        <b>{entry.action === 'pull' ? '拉取代码' : '更新代码'}</b>
-                        <small>{entry.version}</small>
-                      </span>
-                      <span className="recent-path">{entry.target}</span>
-                      <span className="recent-time"><Clock3 size={13} />{formatTime(entry.time)}</span>
-                      <CheckCircle2 size={16} className="recent-success" />
-                    </button>
-                  ))}
-                </>
+                recent.map((entry) => (
+                  <div className="recent-row" key={entry.id}>
+                    <span className={`provider-badge ${entry.provider}`}>
+                      <span>{entry.provider === 'git' ? 'G' : 'S'}</span>
+                      {entry.provider.toUpperCase()}
+                    </span>
+                    <span className="recent-operation">
+                      <b>{entry.action === 'pull' ? '克隆拉取' : '版本更新'}</b>
+                      <small>{entry.version}</small>
+                    </span>
+                    <span className="recent-path" title={entry.target}>{entry.target}</span>
+                    <span className="recent-time"><Clock3 size={12} />{formatTime(entry.time)}</span>
+                    <div className="recent-actions">
+                      <button className="icon-button" onClick={() => loadRecent(entry)} title="载入配置并同步"><RotateCcw size={13} /></button>
+                      <button className="icon-button" onClick={() => openLocalPath(entry.target)} title="打开本地文件夹"><FolderOpen size={13} /></button>
+                      <button className="icon-button" onClick={() => removeRecent(entry.id)} title="删除此记录"><X size={13} /></button>
+                    </div>
+                  </div>
+                ))
               ) : (
                 <div className="recent-empty">
-                  <History size={18} />
-                  <span>完成一次拉取或更新后，任务会显示在这里</span>
+                  <History size={24} />
+                  <span>暂无任务记录，完成一次拉取或更新后会自动归档在此</span>
                 </div>
               )}
             </div>
           </section>
 
           <footer className="page-footer">
-            <span>CodeSync Studio 1.2.1</span>
-            <span>需要帮助？确认 Git / SVN 已安装并已加入系统 PATH</span>
+            <span>CODESYNC STUDIO // DESKTOP EDITION 1.3.0</span>
+            <span>核心状态：GIT CLI READY · SVN CLI READY · LOCAL ENCRYPTION ACTIVE</span>
           </footer>
         </div>
       </main>
@@ -1557,6 +1837,9 @@ function BatchSyncPanel({
   batchSvnMainlineOnly,
   setBatchSvnMainlineOnly,
   batchItems,
+  filteredBatchItems,
+  batchFilter,
+  setBatchFilter,
   batchItemStatuses,
   itemBranchOverrides,
   onItemBranchChange,
@@ -1570,7 +1853,13 @@ function BatchSyncPanel({
   protocolWarning,
   onStart,
   onRetryFailed,
+  onRunSingleItem,
+  onRemoveItem,
+  onCleanUrls,
+  onInsertSamples,
+  onImportUrls,
   onClearUrls
+  , onOpenFolder
 }) {
   const currentUrls = batchProvider === 'git' ? batchGitUrls : batchSvnUrls
   const setUrls = batchProvider === 'git' ? setBatchGitUrls : setBatchSvnUrls
@@ -1580,14 +1869,14 @@ function BatchSyncPanel({
     <div className="sync-panel panel">
       <div className="panel-heading">
         <div>
-          <p className="section-kicker">STEP 01</p>
-          <h2>配置批量拉取任务</h2>
+          <p className="section-kicker">// STEP 01 CONFIGURATION</p>
+          <h2>配置批量任务队列</h2>
         </div>
-        <span className="secure-label"><Check size={13} /> 队列顺序执行</span>
+        <span className="secure-label"><Check size={12} /> 队列化顺序调度</span>
       </div>
 
       <div className="field-group">
-        <label className="field-title">版本控制系统 (Git 与 SVN 相互独立)</label>
+        <label className="field-title">版本控制引擎 (Git 与 SVN 独立隔离)</label>
         <div className="segmented-control">
           <button
             type="button"
@@ -1611,9 +1900,9 @@ function BatchSyncPanel({
       <div className="field-group">
         <div className="label-row">
           <label className="field-title" htmlFor="batch-urls-input">
-            {batchProvider === 'git' ? 'Git 仓库链接列表' : 'SVN 仓库链接列表'}
+            {batchProvider === 'git' ? 'Git 仓库地址列表' : 'SVN 仓库地址列表'}
           </label>
-          <span>一行一个链接 · 可跟空格或 @ 指定分支/版本 · 已解析 {batchItems.length} 个</span>
+          <span>一行一个仓库 · 已解析 {batchItems.length} 项</span>
         </div>
         <div className="batch-textarea-wrap">
           <textarea
@@ -1629,9 +1918,16 @@ function BatchSyncPanel({
             }
           />
         </div>
+        <div className="batch-textarea-toolbar">
+          <div className="batch-textarea-actions">
+            <button type="button" className="batch-text-btn" onClick={onInsertSamples} disabled={batchRunning} title="插入测试样例链接"><Sparkles size={11} />样例链接</button>
+            <button type="button" className="batch-text-btn" onClick={onCleanUrls} disabled={batchRunning || !currentUrls.trim()} title="去除空行与重复链接"><RefreshCw size={11} />整理去重</button>
+          </div>
+          <button type="button" className="batch-text-btn" onClick={onClearUrls} disabled={batchRunning || !currentUrls.trim()} style={{ color: 'var(--crimson-text)' }} title="清空全部输入"><Trash2 size={11} />清空</button>
+        </div>
         {protocolWarning && (
           <div className="batch-alert warning">
-            <AlertCircle size={15} />
+            <AlertCircle size={14} />
             <span>{protocolWarning}</span>
           </div>
         )}
@@ -1640,36 +1936,36 @@ function BatchSyncPanel({
       <div className="field-group">
         <div className="label-row">
           <label className="field-title" htmlFor="batch-target-root">本地保存根目录</label>
-          <span>每个项目将自动在该根目录下创建独立文件夹</span>
+          <span>每个项目将自动在该根目录下创建独立子目录</span>
         </div>
         <div className="input-with-icon">
-          <FolderOpen size={16} />
+          <FolderOpen size={15} />
           <input
             id="batch-target-root"
             value={batchTargetRoot}
             onChange={(e) => setBatchTargetRoot(e.target.value)}
             disabled={batchRunning}
-            placeholder="例如：D:\workspace\my-projects"
+            placeholder="例如：D:\\workspace\\my-projects"
           />
-          <button onClick={browseBatchTargetRoot} title="选择根目录" disabled={batchRunning}>
-            <FolderOpen size={16} />
+          <button onClick={browseBatchTargetRoot} title="浏览选择根目录" disabled={batchRunning}>
+            <FolderOpen size={15} />
           </button>
         </div>
       </div>
 
       <div className="batch-options-grid">
         <div className="field-group" style={{ marginTop: 0 }}>
-          <label className="field-title" htmlFor="batch-conflict-select">目标目录已存在时</label>
+          <label className="field-title" htmlFor="batch-conflict-select">目标目录已存在时策略</label>
           <div className="select-wrap" style={{ marginTop: 7 }}>
-            <RefreshCw size={15} />
+            <RefreshCw size={14} />
             <select
               id="batch-conflict-select"
               value={batchConflictStrategy}
               onChange={(e) => setBatchConflictStrategy(e.target.value)}
               disabled={batchRunning}
             >
-              <option value="update">自动更新已有仓库 (推荐)</option>
-              <option value="skip">跳过已存在的目录</option>
+              <option value="update">自动更新已有仓库 (智能增量同步)</option>
+              <option value="skip">跳过已存在的目录 (不覆盖)</option>
               <option value="error">标记错误并继续下一项</option>
             </select>
             <ChevronDown size={14} />
@@ -1684,27 +1980,27 @@ function BatchSyncPanel({
                 type="button"
                 onClick={onApplyGlobalBranch}
                 disabled={batchRunning || !batchGitBranch.trim()}
-                style={{ fontSize: 9, color: '#a44e70', background: 'transparent', padding: 0 }}
+                style={{ fontSize: 10, color: 'var(--cyan-primary)', background: 'transparent', padding: 0 }}
                 title="将此分支应用到下方所有未指定的项目"
               >
                 应用到全部
               </button>
             </div>
             <div className="input-with-icon" style={{ marginTop: 7 }}>
-              <GitBranch size={15} />
+              <GitBranch size={14} />
               <input
                 id="batch-git-branch"
                 value={batchGitBranch}
                 onChange={(e) => setBatchGitBranch(e.target.value)}
                 disabled={batchRunning}
-                placeholder="未单独指定时使用的默认分支 (留空拉取主线)"
+                placeholder="统一默认拉取分支 (留空拉取主线)"
               />
             </div>
           </div>
         ) : (
           <div className="field-group" style={{ marginTop: 0 }}>
-            <label className="field-title">SVN 选项</label>
-            <div className={`mainline-option ${batchSvnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 7, minHeight: 38, padding: '7px 9px' }}>
+            <label className="field-title">SVN 主线策略</label>
+            <div className={`mainline-option ${batchSvnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 7, minHeight: 42, padding: '8px 12px' }}>
               <label className="toggle-line">
                 <input
                   type="checkbox"
@@ -1715,7 +2011,7 @@ function BatchSyncPanel({
                 <span className="fake-checkbox"><Check size={12} /></span>
                 <span className="mainline-copy">
                   <b>仅拉取主线 trunk</b>
-                  <small>若未指定分支且链接包含 trunk 自动检出 trunk</small>
+                  <small>若未指定分支且链接包含 trunk 自动仅检出 trunk</small>
                 </span>
               </label>
             </div>
@@ -1727,7 +2023,16 @@ function BatchSyncPanel({
         <div className="batch-queue-container">
           <div className="batch-queue-header">
             <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个)</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div className="input-with-icon" style={{ height: 26, padding: '0 8px', fontSize: 11 }}>
+                <Filter size={11} />
+                <input
+                  placeholder="过滤项目名/分支..."
+                  value={batchFilter}
+                  onChange={(e) => setBatchFilter(e.target.value)}
+                  style={{ fontSize: 11 }}
+                />
+              </div>
               <button
                 type="button"
                 className="batch-fetch-all-btn"
@@ -1736,25 +2041,25 @@ function BatchSyncPanel({
                 title="读取所有仓库的可选分支、标签和修订版本"
               >
                 <Search size={11} />
-                读取全部可选版本
+                批量读取版本
               </button>
-              <span style={{ fontSize: 9, color: '#8d7888' }}>按顺序依次执行</span>
             </div>
           </div>
           <div className="batch-queue-col-headers">
             <span>#</span>
-            <span>仓库名称</span>
-            <span>代码版本 / 分支 (下拉选择)</span>
-            <span>本地目标目录</span>
-            <span style={{ textAlign: 'center' }}>状态</span>
+            <span>项目名称</span>
+            <span>版本/分支下拉选择</span>
+            <span>目标目录</span>
+            <span style={{ textAlign: 'center' }}>执行状态</span>
+            <span style={{ textAlign: 'center' }}>操作</span>
           </div>
           <div className="batch-queue-list">
-            {batchItems.map((item, index) => {
-              const itemState = batchItemStatuses[item.id] || { status: 'idle', error: '' }
+            {(filteredBatchItems || batchItems).map((item, index) => {
+              const itemState = batchItemStatuses[item.id] || { status: 'idle', error: '', action: 'pull' }
               const statusClass = itemState.status
               const statusLabel =
-                statusClass === 'running' ? '拉取中' :
-                statusClass === 'success' ? '成功' :
+                statusClass === 'running' ? (itemState.action === 'update' ? '更新中' : '拉取中') :
+                statusClass === 'success' ? (itemState.action === 'update' ? '已更新' : '已拉取') :
                 statusClass === 'error' ? '失败' :
                 statusClass === 'skipped' ? '跳过' : '等待'
 
@@ -1774,9 +2079,9 @@ function BatchSyncPanel({
 
                   <div className="batch-version-select-wrap">
                     {isProbing ? (
-                      <div className="batch-branch-input-wrap" style={{ flex: 1, color: '#9a607a', fontSize: '9.5px' }}>
-                        <LoaderCircle size={12} className="spin" />
-                        <span>读取版本列表中...</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--cyan-primary)', fontSize: 10 }}>
+                        <LoaderCircle size={11} className="spin" />
+                        <span>读取中...</span>
                       </div>
                     ) : (
                       <select
@@ -1792,12 +2097,10 @@ function BatchSyncPanel({
                             : (repoData?.latestRevision ? `最新版本 (r${repoData.latestRevision})` : '最新版本 (HEAD)')}
                         </option>
 
-                        {/* 如果在输入链接中指定了分支但未探测到，予以保留展示 */}
                         {item.parsedBranch && !versionOptions.some((o) => o.name === item.parsedBranch || o.id === item.parsedBranch) && (
                           <option value={item.parsedBranch}>链接指定 · {item.parsedBranch}</option>
                         )}
 
-                        {/* Git 分支分组 */}
                         {versionOptions.some((o) => o.kind === 'branch') && (
                           <optgroup label="分支 (Branches)">
                             {versionOptions.filter((o) => o.kind === 'branch').map((opt) => (
@@ -1806,7 +2109,6 @@ function BatchSyncPanel({
                           </optgroup>
                         )}
 
-                        {/* Git 标签分组 */}
                         {versionOptions.some((o) => o.kind === 'tag') && (
                           <optgroup label="标签 (Tags)">
                             {versionOptions.filter((o) => o.kind === 'tag').map((opt) => (
@@ -1815,18 +2117,16 @@ function BatchSyncPanel({
                           </optgroup>
                         )}
 
-                        {/* SVN 子目录/标签分组 */}
                         {versionOptions.some((o) => o.kind === 'dir') && (
-                          <optgroup label="目录 / 标签 (Directories / Tags)">
+                          <optgroup label="目录 / 标签 (Directories)">
                             {versionOptions.filter((o) => o.kind === 'dir').map((opt) => (
                               <option key={opt.id} value={`dir:${opt.subPath}`}>{opt.label}</option>
                             ))}
                           </optgroup>
                         )}
 
-                        {/* SVN 修订版本历史分组 */}
                         {versionOptions.some((o) => o.kind === 'rev') && (
-                          <optgroup label="修订版本 (Revisions)">
+                          <optgroup label="历史修订版本 (Revisions)">
                             {versionOptions.filter((o) => o.kind === 'rev').map((opt) => (
                               <option key={opt.id} value={`rev:${opt.revision}`}>{opt.label}</option>
                             ))}
@@ -1840,19 +2140,33 @@ function BatchSyncPanel({
                       className="batch-probe-btn"
                       onClick={() => onProbeSingle(item.url)}
                       disabled={batchRunning || isProbing}
-                      title={probeErr ? `读取失败: ${probeErr} (点击重试)` : repoData ? '重新读取该仓库分支与版本' : '读取该仓库的可选分支和版本'}
+                      title={probeErr ? `读取失败: ${probeErr}` : repoData ? '重新读取版本' : '读取该仓库分支与版本'}
                     >
-                      {isProbing ? <LoaderCircle size={12} className="spin" /> : probeErr ? <AlertCircle size={12} color="#c84c59" /> : <Search size={12} />}
+                      {isProbing ? <LoaderCircle size={11} className="spin" /> : <Search size={11} />}
                     </button>
                   </div>
 
                   <span className="batch-item-target" title={item.target}>{item.target}</span>
                   <span className={`batch-status-badge ${statusClass}`} title={itemState.error || ''}>
-                    {statusClass === 'running' && <LoaderCircle size={10} className="spin" />}
-                    {statusClass === 'success' && <Check size={10} />}
-                    {statusClass === 'error' && <AlertCircle size={10} />}
+                    {statusClass === 'running' && <LoaderCircle size={9} className="spin" />}
+                    {statusClass === 'success' && <Check size={9} />}
+                    {statusClass === 'error' && <AlertCircle size={9} />}
                     {statusLabel}
                   </span>
+
+                  <div className="batch-item-actions">
+                    {statusClass === 'success' && (
+                      <button type="button" className="batch-icon-action" onClick={() => onOpenFolder(item.target)} title="打开本地文件夹">
+                        <FolderOpen size={12} />
+                      </button>
+                    )}
+                    <button type="button" className="batch-icon-action" onClick={() => onRunSingleItem(item)} disabled={batchRunning} title="单独拉取/更新该项">
+                      <Play size={11} />
+                    </button>
+                    <button type="button" className="batch-icon-action danger" onClick={() => onRemoveItem(item)} disabled={batchRunning} title="从列表中移除">
+                      <X size={12} />
+                    </button>
+                  </div>
                 </div>
               )
             })}
@@ -1861,8 +2175,8 @@ function BatchSyncPanel({
       )}
 
       <div className="execution-note">
-        <Info size={15} />
-        <span>支持下拉选择版本：点击上方“读取全部可选版本”或单行搜索图标，即可从下拉框中选择要检出的分支、Tag 或修订版本。</span>
+        <Info size={14} />
+        <span>支持独立版本选择：点击“批量读取版本”或单项放大镜，即可为每个仓库单独挑选指定分支、Tag 标签或历史修订版。</span>
       </div>
 
       <div className="panel-actions">
@@ -1872,8 +2186,8 @@ function BatchSyncPanel({
           onClick={onStart}
           disabled={batchRunning || !batchItems.length}
         >
-          {batchRunning ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
-          {batchRunning ? '批量拉取中...' : `开始批量拉取 (${batchItems.length} 个)`}
+          {batchRunning ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}
+          {batchRunning ? '批量任务执行中...' : `开始批量拉取 (${batchItems.length} 个项目)`}
         </button>
 
         {failedCount > 0 && (
@@ -1882,40 +2196,43 @@ function BatchSyncPanel({
             className="ghost-action"
             onClick={onRetryFailed}
             disabled={batchRunning}
-            title="仅重试本次批量中失败的项目"
+            title="仅重试本次批量失败的项目"
           >
-            <RotateCcw size={15} />
+            <RotateCcw size={14} />
             重试失败项 ({failedCount})
           </button>
         )}
-
-        <button
-          type="button"
-          className="ghost-action"
-          onClick={onClearUrls}
-          disabled={batchRunning}
-        >
-          <X size={16} />
-          清空链接
-        </button>
       </div>
     </div>
   )
 }
 
-function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
+function BatchTaskPanel({ progress, running, elapsedSeconds, cancelTask, clearLogs }) {
   const terminalRef = useRef(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [onlyErrors, setOnlyErrors] = useState(false)
+
   useEffect(() => {
-    if (terminalRef.current) {
+    if (autoScroll && terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight
     }
-  }, [progress.logs])
+  }, [progress.logs, autoScroll])
+
+  const copyAllLogs = () => {
+    const text = progress.logs.map((l) => `[${l.time}] ${l.text}`).join('\n')
+    navigator.clipboard.writeText(text)
+  }
+
+  const filteredLogs = useMemo(() => {
+    if (!onlyErrors) return progress.logs
+    return progress.logs.filter((l) => l.source === 'stderr')
+  }, [progress.logs, onlyErrors])
 
   const statusLabel =
     progress.status === 'success' ? '批量完成' :
-    progress.status === 'error' ? '存在失败' :
-    progress.status === 'cancelled' ? '已停止' :
-    running ? '批量执行中' : '等待任务'
+    progress.status === 'error' ? '部分失败' :
+    progress.status === 'cancelled' ? '已中止' :
+    running ? '批量拉取中' : '等待启动'
 
   const statusClass =
     progress.status === 'success' ? 'success' :
@@ -1927,8 +2244,8 @@ function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
     <div className="task-panel panel">
       <div className="panel-heading">
         <div>
-          <p className="section-kicker">STEP 02</p>
-          <h2>批量任务进度</h2>
+          <p className="section-kicker">// STEP 02 TELEMETRY & CONSOLE</p>
+          <h2>批量队列遥测</h2>
         </div>
         <span className={`status-pill ${statusClass}`}>
           <i />{statusLabel}
@@ -1966,8 +2283,17 @@ function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
       </div>
 
       <div className="log-heading">
-        <span><Terminal size={14} />命令输出</span>
-        <button onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+        <span><Terminal size={13} />批量命令实时流</span>
+        <div className="log-tools">
+          <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
+            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部输出' : '仅看错误'}
+          </button>
+          <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
+            {autoScroll ? '锁定滚动' : '跟随滚动'}
+          </button>
+          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制日志</button>
+          <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+        </div>
       </div>
 
       <div className="terminal-window">
@@ -1975,11 +2301,11 @@ function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
           <span className="terminal-dot red" />
           <span className="terminal-dot yellow" />
           <span className="terminal-dot green" />
-          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync</span>
+          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync ~ batch-queue</span>
         </div>
-        <div className="terminal-output" ref={terminalRef} aria-live="polite">
-          {progress.logs.length ? (
-            progress.logs.map((line, index) => (
+        <div className="terminal-output" ref={terminalRef}>
+          {filteredLogs.length ? (
+            filteredLogs.map((line, index) => (
               <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
                 <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
                 <span>{line.text}</span>
@@ -1989,20 +2315,20 @@ function BatchTaskPanel({ progress, running, cancelTask, clearLogs }) {
             <div className="terminal-placeholder">
               <Terminal size={22} />
               <span>等待批量任务启动...</span>
-              <small>每个仓库的拉取命令输出会在这里实时滚动</small>
+              <small>各仓库的拉取输出流会在此有序滚动呈现</small>
             </div>
           )}
         </div>
       </div>
 
       <div className="task-bottom">
-        <span><Zap size={13} />批量拉取引擎就绪</span>
+        <span><Zap size={13} />{running ? `批量任务运行中 · 已耗时 ${formatDuration(elapsedSeconds)}` : '批量引擎待命'}</span>
         {running ? (
-          <button className="stop-button" onClick={cancelTask}>
-            <Square size={13} />停止批量任务
-          </button>
+          <button className="stop-button" onClick={cancelTask}><Square size={13} />停止批量任务</button>
         ) : (
-          <span className="shortcut-hint"><Play size={12} />开始后保持窗口打开</span>
+          <span style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Play size={11} />开始后保持窗口打开
+          </span>
         )}
       </div>
     </div>
@@ -2159,6 +2485,7 @@ function CredentialState({ active, label }) {
 }
 
 function DirectoryBrowser({ entries, path, loading, error, selectedPath, onNavigate, onSelect, action }) {
+  const [filterText, setFilterText] = useState('')
   const verb = action === 'update' ? '更新' : '拉取'
   const noneLabel = action === 'update' ? '整个工作副本' : '整个仓库'
   const crumbs = useMemo(() => {
@@ -2172,6 +2499,12 @@ function DirectoryBrowser({ entries, path, loading, error, selectedPath, onNavig
   }, [path])
   const fullPath = (name) => joinBrowsePath(path, name)
 
+  const visibleEntries = useMemo(() => {
+    if (!filterText.trim()) return entries
+    const q = filterText.toLowerCase().trim()
+    return entries.filter((e) => e.name.toLowerCase().includes(q))
+  }, [entries, filterText])
+
   return (
     <div className="dir-browser">
       <div className="dir-crumbs">
@@ -2184,42 +2517,52 @@ function DirectoryBrowser({ entries, path, loading, error, selectedPath, onNavig
           </Fragment>
         ))}
       </div>
+      {entries.length > 5 && (
+        <div style={{ padding: '4px 8px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <input
+            style={{ width: '100%', background: 'transparent', border: 0, color: 'var(--text-heading)', fontSize: '11px', outline: 'none' }}
+            placeholder="搜索当前目录下文件/文件夹..."
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+          />
+        </div>
+      )}
       <div className="dir-list">
         {loading ? (
-          <div className="dir-loading"><LoaderCircle size={15} className="spin" />正在读取目录内容...</div>
+          <div className="dir-loading"><LoaderCircle size={14} className="spin" />正在读取远程目录结构...</div>
         ) : error ? (
           <div className="dir-error"><AlertCircle size={14} />{error}<button onClick={() => onNavigate(path)}>重试</button></div>
-        ) : entries.length ? (
-          entries.map((entry) => (
+        ) : visibleEntries.length ? (
+          visibleEntries.map((entry) => (
             entry.kind === 'dir' ? (
               <div
                 key={entry.name}
                 className={`dir-row dir ${selectedPath === fullPath(entry.name) ? 'selected' : ''}`}
                 onClick={() => onSelect(fullPath(entry.name))}
                 onDoubleClick={() => onNavigate(fullPath(entry.name))}
-                title="单击选择 · 双击进入"
+                title="单击选择该目录 · 双击深入子目录"
               >
-                <Folder size={15} />
+                <Folder size={14} />
                 <span className="dir-name">{entry.name}</span>
                 <span className="dir-radio">{selectedPath === fullPath(entry.name) ? <Check size={10} /> : ''}</span>
                 <button className="dir-enter" title="进入该目录" onClick={(event) => { event.stopPropagation(); onNavigate(fullPath(entry.name)) }}>
-                  <ChevronRight size={13} />
+                  <ChevronRight size={12} />
                 </button>
               </div>
             ) : (
-              <div key={entry.name} className="dir-row file" title="文件不支持作为拉取目标">
-                <FileText size={14} />
+              <div key={entry.name} className="dir-row file" title="文件项，请选择父级文件夹">
+                <FileText size={13} />
                 <span className="dir-name">{entry.name}</span>
               </div>
             )
           ))
         ) : (
-          <div className="dir-empty"><FolderOpen size={15} />该目录下没有内容</div>
+          <div className="dir-empty"><FolderOpen size={14} />该目录下无内容</div>
         )}
       </div>
       <div className="dir-status">
         <span>将{verb}：<b>{selectedPath ? selectedPath : noneLabel}</b></span>
-        {selectedPath ? <button onClick={() => onSelect('')}>清除选择</button> : <small>点击目录行即可选择</small>}
+        {selectedPath ? <button onClick={() => onSelect('')}>清除已选目录</button> : <small>点击目录即可作为检出目标</small>}
       </div>
     </div>
   )
@@ -2232,21 +2575,21 @@ function RepoSummary({ repo, provider }) {
         <span>{provider === 'git' ? 'G' : 'S'}</span>
         <div>
           <b>{provider === 'git' ? 'Git 远程仓库' : 'SVN 远程仓库'}</b>
-          <small>刚刚读取成功</small>
+          <small>元数据读取成功</small>
         </div>
       </div>
       <div className="repo-facts">
         {provider === 'git' ? (
           <>
-            <span><GitBranch size={13} /><b>{repo.branches?.length || 0}</b> 分支</span>
-            <span><GitCommitHorizontal size={13} /><b>{repo.tags?.length || 0}</b> 标签</span>
-            <span><strong>{repo.defaultBranch || 'HEAD'}</strong> 默认分支</span>
+            <span><GitBranch size={12} /><b>{repo.branches?.length || 0}</b> 分支</span>
+            <span><GitCommitHorizontal size={12} /><b>{repo.tags?.length || 0}</b> 标签</span>
+            <span><strong>{repo.defaultBranch || 'HEAD'}</strong> 主线</span>
           </>
         ) : (
           <>
-            <span><GitCommitHorizontal size={13} /><b>r{repo.latestRevision || 'HEAD'}</b> 最新修订</span>
-            <span><Server size={13} /><b>{repo.directories?.length || 0}</b> 个目录</span>
-            <span><strong>{repo.revisions?.length || 0}</strong> 条记录</span>
+            <span><GitCommitHorizontal size={12} /><b>r{repo.latestRevision || 'HEAD'}</b> 最新修订</span>
+            <span><Server size={12} /><b>{repo.directories?.length || 0}</b> 个目录</span>
+            <span><strong>{repo.revisions?.length || 0}</strong> 条提交记录</span>
           </>
         )}
       </div>
@@ -2254,22 +2597,43 @@ function RepoSummary({ repo, provider }) {
   )
 }
 
-function TaskPanel({ progress, running, cancelTask, clearLogs }) {
+function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, cancelTask, clearLogs }) {
   const terminalRef = useRef(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [onlyErrors, setOnlyErrors] = useState(false)
+
   useEffect(() => {
-    if (terminalRef.current) {
+    if (autoScroll && terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight
     }
-  }, [progress.logs])
+  }, [progress.logs, autoScroll])
 
-  const statusLabel = progress.status === 'success' ? '已完成' : progress.status === 'error' ? '失败' : running ? '执行中' : '等待任务'
-  const statusClass = progress.status === 'success' ? 'success' : progress.status === 'error' ? 'error' : running ? 'running' : 'idle'
+  const copyAllLogs = () => {
+    const text = progress.logs.map((l) => `[${l.time}] ${l.text}`).join('\n')
+    navigator.clipboard.writeText(text)
+  }
+
+  const filteredLogs = useMemo(() => {
+    if (!onlyErrors) return progress.logs
+    return progress.logs.filter((l) => l.source === 'stderr')
+  }, [progress.logs, onlyErrors])
+
+  const statusLabel =
+    progress.status === 'success' ? '任务完成' :
+    progress.status === 'error' ? '任务失败' :
+    running ? '正在执行' : '等待任务'
+
+  const statusClass =
+    progress.status === 'success' ? 'success' :
+    progress.status === 'error' ? 'error' :
+    running ? 'running' : 'idle'
+
   return (
     <div className="task-panel panel">
       <div className="panel-heading">
         <div>
-          <p className="section-kicker">STEP 02</p>
-          <h2>实时任务进度</h2>
+          <p className="section-kicker">// STEP 02 TELEMETRY & CONSOLE</p>
+          <h2>实时任务遥测</h2>
         </div>
         <span className={`status-pill ${statusClass}`}><i />{statusLabel}</span>
       </div>
@@ -2283,24 +2647,33 @@ function TaskPanel({ progress, running, cancelTask, clearLogs }) {
         </div>
         <div className="progress-copy">
           <b>{progress.label}</b>
-          <span>{running ? '命令正在本机终端进程中执行' : progress.status === 'success' ? '工作副本已准备好使用' : '执行输出会实时显示在下方'}</span>
+          <span>{running ? `正在通过系统进程执行 · 已耗时 ${formatDuration(elapsedSeconds)}` : progress.status === 'success' ? '工作副本已就绪，可随时使用' : '命令行输出实时滚动显示在下方'}</span>
         </div>
       </div>
       <div className="bar-track"><span style={{ width: `${Math.max(0, Math.min(100, progress.value))}%` }} /></div>
       <div className="log-heading">
-        <span><Terminal size={14} />命令输出</span>
-        <button onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+        <span><Terminal size={13} />命令终端输出</span>
+        <div className="log-tools">
+          <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
+            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部输出' : '仅看错误'}
+          </button>
+          <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
+            {autoScroll ? '锁定滚动' : '跟随滚动'}
+          </button>
+          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制日志</button>
+          <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+        </div>
       </div>
       <div className="terminal-window">
         <div className="terminal-header-dots">
           <span className="terminal-dot red" />
           <span className="terminal-dot yellow" />
           <span className="terminal-dot green" />
-          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync</span>
+          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync ~ telemetry</span>
         </div>
-        <div className="terminal-output" ref={terminalRef} aria-live="polite">
-          {progress.logs.length ? (
-            progress.logs.map((line, index) => (
+        <div className="terminal-output" ref={terminalRef}>
+          {filteredLogs.length ? (
+            filteredLogs.map((line, index) => (
               <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
                 <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
                 <span>{line.text}</span>
@@ -2310,18 +2683,27 @@ function TaskPanel({ progress, running, cancelTask, clearLogs }) {
             <div className="terminal-placeholder">
               <Terminal size={22} />
               <span>等待任务启动...</span>
-              <small>Git 和 SVN 的详细输出会在这里实时滚动</small>
+              <small>Git 和 SVN 的详细命令行输出会在此实时滚动呈现</small>
             </div>
           )}
         </div>
       </div>
       <div className="task-bottom">
-        <span><Zap size={13} />命令行输出已连接</span>
-        {running ? (
-          <button className="stop-button" onClick={cancelTask}><Square size={13} />停止任务</button>
-        ) : (
-          <span className="shortcut-hint"><Play size={12} />开始后保持窗口打开</span>
-        )}
+        <span><Zap size={13} />CLI 通道已连接</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {progress.status === 'success' && targetPath && (
+            <button className="ghost-action" onClick={onOpenPath} style={{ height: 32, padding: '0 12px', fontSize: 12 }}>
+              <FolderOpen size={13} />打开工作目录
+            </button>
+          )}
+          {running ? (
+            <button className="stop-button" onClick={cancelTask}><Square size={13} />停止任务</button>
+          ) : (
+            <span style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Play size={11} />执行期间请保持应用窗口开启
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )
