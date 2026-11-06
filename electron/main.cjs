@@ -213,9 +213,10 @@ function isPrivateOrLocalHost(urlStr) {
       const u = new URL(raw)
       host = u.hostname.toLowerCase()
     }
-    if (host === 'localhost' || host === '127.0.0.1') return true
-    if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return true
-    if (host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.corp') || host.includes('hundsun')) return true
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true
+    if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) || /^169\.254\./.test(host)) return true
+    if (!host.includes('.')) return true
+    if (host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.corp') || host.endsWith('.lan') || host.endsWith('.intra') || host.endsWith('.priv') || host.endsWith('.home')) return true
     return false
   } catch {
     return false
