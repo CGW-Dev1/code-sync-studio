@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
+  Columns2,
   Copy,
   Download,
   ExternalLink,
@@ -35,6 +36,7 @@ import {
   Search,
   Server,
   Settings2,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Terminal,
@@ -428,6 +430,10 @@ function App() {
   const [batchElapsed, setBatchElapsed] = useState(0)
   const [batchItemStatuses, setBatchItemStatuses] = useState({})
   const [batchFilter, setBatchFilter] = useState('')
+  const [batchViewMode, setBatchViewMode] = useState('split') // 'queue' | 'telemetry' | 'split'
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [historyFilter, setHistoryFilter] = useState('')
+  const [historyProviderFilter, setHistoryProviderFilter] = useState('all') // 'all' | 'git' | 'svn'
   const [batchProgress, setBatchProgress] = useState({
     value: 0,
     label: '等待批量任务启动',
@@ -565,6 +571,20 @@ function App() {
     const q = batchFilter.toLowerCase().trim()
     return batchItems.filter((item) => item.name.toLowerCase().includes(q) || item.url.toLowerCase().includes(q) || (item.parsedBranch && item.parsedBranch.toLowerCase().includes(q)))
   }, [batchItems, batchFilter])
+
+  const filteredRecent = useMemo(() => {
+    return recent.filter((entry) => {
+      if (historyProviderFilter !== 'all' && entry.provider !== historyProviderFilter) return false
+      if (!historyFilter.trim()) return true
+      const q = historyFilter.toLowerCase().trim()
+      return (
+        (entry.target && entry.target.toLowerCase().includes(q)) ||
+        (entry.url && entry.url.toLowerCase().includes(q)) ||
+        (entry.version && String(entry.version).toLowerCase().includes(q)) ||
+        (entry.provider && entry.provider.toLowerCase().includes(q))
+      )
+    })
+  }, [recent, historyFilter, historyProviderFilter])
 
   const [batchRepoDataMap, setBatchRepoDataMap] = useState({})
   const [batchProbingMap, setBatchProbingMap] = useState({})
@@ -887,6 +907,7 @@ function App() {
     setBatchRunning(true)
     batchRunningRef.current = true
     cancelBatchRef.current = false
+    if (batchViewMode === 'queue') setBatchViewMode('split')
 
     setBatchItemStatuses((prev) => {
       const next = { ...prev }
@@ -1385,9 +1406,9 @@ function App() {
             <span>批量</span>
           </button>
           <button
-            className="side-nav-item"
-            onClick={() => document.getElementById('recent')?.scrollIntoView({ behavior: 'smooth' })}
-            title="历史同步记录"
+            className={`side-nav-item ${mode === 'history' ? 'active' : ''}`}
+            onClick={() => setMode('history')}
+            title="历史任务与同步记录"
           >
             <History size={19} />
             <span>记录</span>
@@ -1430,7 +1451,13 @@ function App() {
               SYS // WORKSPACE
             </div>
             <ChevronRight size={14} color="#64748b" />
-            <strong>{mode === 'single' ? '单仓代码同步与版本更新' : '多仓批量队列拉取引擎'}</strong>
+            <strong>
+              {mode === 'single'
+                ? '单仓代码同步与版本更新'
+                : mode === 'batch'
+                ? '多仓批量队列拉取引擎'
+                : '任务执行与同步记录'}
+            </strong>
           </div>
           <div className="mode-segmented">
             <button
@@ -1449,6 +1476,14 @@ function App() {
               <Layers size={13} />
               <span>批量引擎</span>
             </button>
+            <button
+              type="button"
+              className={`mode-tab-btn ${mode === 'history' ? 'active' : ''}`}
+              onClick={() => setMode('history')}
+            >
+              <History size={13} />
+              <span>同步记录</span>
+            </button>
           </div>
           <div className="topbar-right">
             <span className="runtime-badge"><span className="pulse" /> 本机进程执行</span>
@@ -1461,22 +1496,41 @@ function App() {
 
         <div className="page-content">
           <section className="page-intro">
-            <div>
-              <p className="kicker">
-                <span className="intro-mark"><GitCommitHorizontal size={13} /></span>
-                {mode === 'single' ? 'REPO_SYNC_STUDIO // 单仓工作台' : 'BATCH_SYNC_ENGINE // 多仓调度引擎'}
-              </p>
-              <h1>{mode === 'single' ? '同步与拉取代码库' : '多仓批量拉取与更新'}</h1>
-              <p className="intro-copy">
+            <div className="intro-title-group">
+              <span className="intro-kicker">
+                <GitCommitHorizontal size={13} />
                 {mode === 'single'
-                  ? '支持一键克隆远程仓库、切换分支/标签更新，或按需检出指定子目录（Sparse Checkout）。'
-                  : '支持多行输入仓库地址队列化批量执行。Git 与 SVN 独立调度，支持智能自动更新已有仓库与版本下拉点选。'}
-              </p>
+                  ? 'SYS.SINGLE // 单仓工作台'
+                  : mode === 'batch'
+                  ? 'SYS.BATCH // 多仓调度引擎'
+                  : 'SYS.HISTORY // 任务执行记录'}
+              </span>
+              <span className="intro-heading">
+                {mode === 'single'
+                  ? '单仓代码拉取与版本更新'
+                  : mode === 'batch'
+                  ? '多仓批量队列调度'
+                  : '历史同步任务归档'}
+              </span>
+              <span className="intro-divider">/</span>
+              <span className="intro-subtext">
+                {mode === 'single'
+                  ? '支持一键克隆、切换分支/标签更新与按需子目录检出'
+                  : mode === 'batch'
+                  ? '多仓库并发队列调度，支持智能自动更新与独立分支选择'
+                  : '集中检索所有已执行任务，支持一键重载配置或定位本地目录'}
+              </span>
             </div>
-            <div className="intro-meta">
-              <span>ENGINE STATUS</span>
-              <strong>GIT / SVN CLI</strong>
-              <small>{mode === 'single' ? '实时命令行遥测已连接' : `队列待命 · 已解析 ${batchItems.length} 个项目`}</small>
+            <div className="intro-meta-badge">
+              <span className="pulse" />
+              <strong>{mode === 'history' ? `${recent.length} 条记录` : 'CLI 引擎就绪'}</strong>
+              <small>
+                {mode === 'single'
+                  ? 'GIT / SVN 直连'
+                  : mode === 'batch'
+                  ? `已解析 ${batchItems.length} 个项目`
+                  : '本地持久化存储'}
+              </small>
             </div>
           </section>
 
@@ -1490,6 +1544,7 @@ function App() {
                   </div>
                   <span className="secure-label"><Check size={12} /> 本机直连</span>
                 </div>
+                <div className="sync-panel-content">
                 <div className="field-group">
                   <label className="field-title">版本控制引擎</label>
                   <div className="segmented-control">
@@ -1537,15 +1592,16 @@ function App() {
                 <div className="repo-discovery">
                   {repo ? <RepoSummary repo={repo} provider={provider} /> : (
                     <div className="discovery-empty">
-                      <Search size={16} />
-                      <span>输入仓库地址后点击右侧放大镜，可自动解析远程分支、Tag 标签或修订版本</span>
+                      <Search size={13} />
+                      <span>输入仓库地址后点击右侧放大镜可预检分支与版本，或留空直接拉取默认分支 (HEAD)</span>
                     </div>
                   )}
                 </div>
+                {versions.length > 0 && (
                 <div className="field-group">
                   <div className="label-row">
                     <label className="field-title" htmlFor="version-select">目标分支 / 修订版本</label>
-                    <span>{versions.length ? `${versions.length} 个版本选项` : '请先点击上方放大镜探测'}</span>
+                    <span>{versions.length} 个可选版本</span>
                   </div>
                   <div className="select-wrap">
                     <GitCommitHorizontal size={15} />
@@ -1553,62 +1609,75 @@ function App() {
                       id="version-select"
                       value={versionId}
                       onChange={(event) => setVersionId(event.target.value)}
-                      disabled={!versions.length}
                     >
-                      {versions.length ? (
-                        versions.map((item) => (
+                      {versions.map((item) => (
                           <option key={item.id} value={item.id}>
                             {item.label}{item.hash ? `  ·  ${shortHash(item.hash)}` : ''}
                           </option>
-                        ))
-                      ) : (
-                        <option>先读取仓库信息，或保持默认主线 (HEAD)</option>
-                      )}
+                      ))}
                     </select>
                     <ChevronDown size={14} />
                   </div>
                 </div>
-                {repo && (
-                  <div className="field-group browse-group">
-                    <div className="label-row">
-                      <label className="field-title">子目录按需检出 (Sparse Checkout)</label>
-                      <span>{selectedPath ? `已选子目录: ${selectedPath}` : '未选择，默认同步整个仓库'}</span>
-                    </div>
-                    <DirectoryBrowser
-                      entries={browseEntries}
-                      path={browsePath}
-                      loading={browseLoading}
-                      error={browseError}
-                      selectedPath={selectedPath}
-                      onNavigate={navigateBrowse}
-                      onSelect={selectBrowsePath}
-                      action={action}
-                    />
-                  </div>
                 )}
-                {provider === 'svn' && action === 'pull' && (
-                  <div className={`mainline-option ${svnMainlineOnly ? 'enabled' : ''}`}>
-                    <label className="toggle-line">
-                      <input
-                        type="checkbox"
-                        checked={svnMainlineOnly}
-                        onChange={(event) => { setSvnMainlineOnly(event.target.checked); if (event.target.checked) setSelectedPath('') }}
-                        disabled={!url.trim()}
-                      />
-                      <span className="fake-checkbox"><Check size={12} /></span>
-                      <span className="mainline-copy">
-                        <b>仅拉取主线 trunk</b>
-                        <small>自动定位并仅检出 <code>trunk</code>，节省磁盘空间</small>
-                      </span>
-                    </label>
-                    <div className="mainline-actions">
-                      {mainlineCandidates.length > 1 && (
-                        <select aria-label="主线目录" value={svnMainlinePath} onChange={(event) => setSvnMainlinePath(event.target.value)}>
-                          {mainlineCandidates.map((item) => <option key={item.url} value={item.url}>{item.path}</option>)}
-                        </select>
-                      )}
-                      <span className={`mainline-status ${svnMainlineUrl ? 'available' : ''}`}>{mainlineStatus}</span>
-                    </div>
+                {(repo || (provider === 'svn' && action === 'pull')) && (
+                  <div className="advanced-options-wrapper">
+                    <button
+                      type="button"
+                      className="advanced-toggle-btn"
+                      onClick={() => setShowAdvanced(!showAdvanced)}
+                    >
+                      <SlidersHorizontal size={13} />
+                      <span>高级选项 {selectedPath ? `(已选子目录: ${selectedPath})` : svnMainlineOnly ? '(仅主线 trunk)' : '(子目录检出 / 主线策略)'}</span>
+                      <ChevronDown size={13} style={{ transform: showAdvanced ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease' }} />
+                    </button>
+                    {showAdvanced && (
+                      <div className="advanced-options-content">
+                        {repo && (
+                          <div className="field-group browse-group" style={{ marginTop: 8 }}>
+                            <div className="label-row">
+                              <label className="field-title">子目录按需检出 (Sparse Checkout)</label>
+                              <span>{selectedPath ? `已选子目录: ${selectedPath}` : '未选择，默认同步整个仓库'}</span>
+                            </div>
+                            <DirectoryBrowser
+                              entries={browseEntries}
+                              path={browsePath}
+                              loading={browseLoading}
+                              error={browseError}
+                              selectedPath={selectedPath}
+                              onNavigate={navigateBrowse}
+                              onSelect={selectBrowsePath}
+                              action={action}
+                            />
+                          </div>
+                        )}
+                        {provider === 'svn' && action === 'pull' && (
+                          <div className={`mainline-option ${svnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 8 }}>
+                            <label className="toggle-line">
+                              <input
+                                type="checkbox"
+                                checked={svnMainlineOnly}
+                                onChange={(event) => { setSvnMainlineOnly(event.target.checked); if (event.target.checked) setSelectedPath('') }}
+                                disabled={!url.trim()}
+                              />
+                              <span className="fake-checkbox"><Check size={12} /></span>
+                              <span className="mainline-copy">
+                                <b>仅拉取主线 trunk</b>
+                                <small>自动定位并仅检出 <code>trunk</code>，节省磁盘空间</small>
+                              </span>
+                            </label>
+                            <div className="mainline-actions">
+                              {mainlineCandidates.length > 1 && (
+                                <select aria-label="主线目录" value={svnMainlinePath} onChange={(event) => setSvnMainlinePath(event.target.value)}>
+                                  {mainlineCandidates.map((item) => <option key={item.url} value={item.url}>{item.path}</option>)}
+                                </select>
+                              )}
+                              <span className={`mainline-status ${svnMainlineUrl ? 'available' : ''}`}>{mainlineStatus}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
                 <div className="field-group">
@@ -1650,6 +1719,7 @@ function App() {
                   <Info size={14} />
                   <span>认证调用本机 Git Credential Manager 或系统 SSH 秘钥与 SVN 配置，全流程本地执行，不向任何第三方云端传输。</span>
                 </div>
+                </div>
                 <div className="panel-actions">
                   <button className="primary-action" onClick={runTask} disabled={running}>
                     {running ? <LoaderCircle size={16} className="spin" /> : action === 'pull' ? <Download size={16} /> : <RefreshCw size={16} />}
@@ -1687,7 +1757,7 @@ function App() {
                 clearLogs={() => setProgress((current) => ({ ...current, logs: [] }))}
               />
             </section>
-          ) : (
+          ) : mode === 'batch' ? (
             <section className="sync-layout">
               <BatchSyncPanel
                 batchProvider={batchProvider}
@@ -1706,29 +1776,15 @@ function App() {
                 batchSvnMainlineOnly={batchSvnMainlineOnly}
                 setBatchSvnMainlineOnly={handleSetBatchSvnMainlineOnly}
                 batchItems={batchItems}
-                filteredBatchItems={filteredBatchItems}
-                batchFilter={batchFilter}
-                setBatchFilter={setBatchFilter}
                 batchItemStatuses={batchItemStatuses}
-                itemBranchOverrides={itemBranchOverrides}
-                onItemBranchChange={handleItemBranchChange}
                 onApplyGlobalBranch={handleApplyGlobalBranch}
-                batchRepoDataMap={batchRepoDataMap}
-                batchProbingMap={batchProbingMap}
-                batchProbeErrorMap={batchProbeErrorMap}
-                onProbeSingle={probeSingleBatchRepo}
-                onProbeAll={probeAllBatchRepos}
                 batchRunning={batchRunning}
                 protocolWarning={protocolWarning}
                 onStart={() => runBatchSync(false)}
                 onRetryFailed={() => runBatchSync(true)}
-                onRunSingleItem={runSingleBatchItem}
-                onRemoveItem={handleRemoveBatchItem}
                 onCleanUrls={handleCleanBatchUrls}
                 onInsertSamples={handleInsertSamples}
-                onImportUrls={handleImportUrlsFromFile}
                 onClearUrls={clearBatchUrls}
-                onOpenFolder={openLocalPath}
               />
 
               <BatchTaskPanel
@@ -1737,59 +1793,178 @@ function App() {
                 elapsedSeconds={batchElapsed}
                 cancelTask={cancelBatchSync}
                 clearLogs={() => setBatchProgress((current) => ({ ...current, logs: [] }))}
+                batchItems={batchItems}
+                filteredBatchItems={filteredBatchItems}
+                batchFilter={batchFilter}
+                setBatchFilter={setBatchFilter}
+                batchItemStatuses={batchItemStatuses}
+                itemBranchOverrides={itemBranchOverrides}
+                onItemBranchChange={handleItemBranchChange}
+                batchRepoDataMap={batchRepoDataMap}
+                batchProbingMap={batchProbingMap}
+                batchProbeErrorMap={batchProbeErrorMap}
+                onProbeSingle={probeSingleBatchRepo}
+                onProbeAll={probeAllBatchRepos}
+                batchProvider={batchProvider}
+                onRunSingleItem={runSingleBatchItem}
+                onRemoveItem={handleRemoveBatchItem}
+                onOpenFolder={openLocalPath}
+                batchViewMode={batchViewMode}
+                setBatchViewMode={setBatchViewMode}
               />
             </section>
-          )}
-
-          <section className="recent-section" id="recent">
-            <div className="section-title-row">
-              <div>
-                <p className="section-kicker">// ACTIVITY HISTORY</p>
-                <h2>最近任务记录</h2>
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  className="text-button"
-                  onClick={() => {
-                    setRecent([])
-                    localStorage.removeItem('code-sync-recent')
-                    showToast('历史任务记录已清空')
-                  }}
-                  disabled={!recent.length}
-                >
-                  <Trash2 size={13} style={{ display: 'inline', marginRight: 4 }} />清空全部记录
-                </button>
-              </div>
-            </div>
-            <div className="recent-table">
-              {recent.length ? (
-                recent.map((entry) => (
-                  <div className="recent-row" key={entry.id}>
-                    <span className={`provider-badge ${entry.provider}`}>
-                      <span>{entry.provider === 'git' ? 'G' : 'S'}</span>
-                      {entry.provider.toUpperCase()}
-                    </span>
-                    <span className="recent-operation">
-                      <b>{entry.action === 'pull' ? '克隆拉取' : '版本更新'}</b>
-                      <small>{entry.version}</small>
-                    </span>
-                    <span className="recent-path" title={entry.target}>{entry.target}</span>
-                    <span className="recent-time"><Clock3 size={12} />{formatTime(entry.time)}</span>
-                    <div className="recent-actions">
-                      <button className="icon-button" onClick={() => loadRecent(entry)} title="载入配置并同步"><RotateCcw size={13} /></button>
-                      <button className="icon-button" onClick={() => openLocalPath(entry.target)} title="打开本地文件夹"><FolderOpen size={13} /></button>
-                      <button className="icon-button" onClick={() => removeRecent(entry.id)} title="删除此记录"><X size={13} /></button>
-                    </div>
+          ) : (
+            <section className="history-layout">
+              <div className="history-panel panel">
+                <div className="history-toolbar">
+                  <div className="history-search-wrap">
+                    <Search size={14} color="#64748b" />
+                    <input
+                      className="history-search-input"
+                      placeholder="过滤历史任务 (仓库地址 / 目标目录 / 分支 / 关键字)..."
+                      value={historyFilter}
+                      onChange={(e) => setHistoryFilter(e.target.value)}
+                    />
+                    {historyFilter && (
+                      <button type="button" className="clear-filter-btn" onClick={() => setHistoryFilter('')} title="清除过滤">
+                        <X size={12} />
+                      </button>
+                    )}
                   </div>
-                ))
-              ) : (
-                <div className="recent-empty">
-                  <History size={24} />
-                  <span>暂无任务记录，完成一次拉取或更新后会自动归档在此</span>
+
+                  <div className="history-filter-pills">
+                    <button
+                      type="button"
+                      className={`history-filter-pill ${historyProviderFilter === 'all' ? 'active' : ''}`}
+                      onClick={() => setHistoryProviderFilter('all')}
+                    >
+                      全部 ({recent.length})
+                    </button>
+                    <button
+                      type="button"
+                      className={`history-filter-pill ${historyProviderFilter === 'git' ? 'active' : ''}`}
+                      onClick={() => setHistoryProviderFilter('git')}
+                    >
+                      <GitBranch size={12} /> Git ({recent.filter((r) => r.provider === 'git').length})
+                    </button>
+                    <button
+                      type="button"
+                      className={`history-filter-pill ${historyProviderFilter === 'svn' ? 'active' : ''}`}
+                      onClick={() => setHistoryProviderFilter('svn')}
+                    >
+                      <Server size={12} /> SVN ({recent.filter((r) => r.provider === 'svn').length})
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="history-clear-btn"
+                    onClick={() => {
+                      if (!recent.length) return
+                      setRecent([])
+                      localStorage.removeItem('code-sync-recent')
+                      showToast('已清空全部历史任务记录')
+                    }}
+                    disabled={!recent.length}
+                    title="清空当前所有历史任务归档"
+                  >
+                    <Trash2 size={13} />
+                    <span>清空记录</span>
+                  </button>
                 </div>
-              )}
-            </div>
-          </section>
+
+                <div className="history-table-container">
+                  <div className="history-table-header">
+                    <span>#</span>
+                    <span>引擎</span>
+                    <span>操作</span>
+                    <span>远程仓库地址</span>
+                    <span>分支 / 修订版</span>
+                    <span>本地工作目录</span>
+                    <span>执行时间</span>
+                    <span style={{ textAlign: 'center' }}>操作</span>
+                  </div>
+
+                  <div className="history-table-body">
+                    {filteredRecent.length ? (
+                      filteredRecent.map((entry, index) => (
+                        <div className="history-table-row" key={entry.id}>
+                          <span className="history-col-index">#{index + 1}</span>
+                          <span>
+                            <span className={`provider-badge ${entry.provider}`}>
+                              <span>{entry.provider === 'git' ? 'G' : 'S'}</span>
+                              {entry.provider.toUpperCase()}
+                            </span>
+                          </span>
+                          <span>
+                            <span className={`action-pill ${entry.action}`}>
+                              {entry.action === 'pull' ? '克隆' : '更新'}
+                            </span>
+                          </span>
+                          <span className="history-col-url" title={entry.url || '未记录地址'}>
+                            {entry.url || '-'}
+                          </span>
+                          <span>
+                            <span className="history-version-badge" title={entry.version}>
+                              <GitCommitHorizontal size={11} />
+                              {entry.version || 'HEAD'}
+                            </span>
+                          </span>
+                          <span
+                            className="history-col-path"
+                            title={`点击在系统资源管理器中打开: ${entry.target}`}
+                            onClick={() => openLocalPath(entry.target)}
+                          >
+                            {entry.target}
+                          </span>
+                          <span className="history-col-time">
+                            <Clock3 size={11} />
+                            {formatTime(entry.time)}
+                          </span>
+                          <div className="history-col-actions">
+                            <button
+                              type="button"
+                              className="history-action-btn"
+                              onClick={() => loadRecent(entry)}
+                              title="重载此配置并返回单仓工作台"
+                            >
+                              <RotateCcw size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              className="history-action-btn"
+                              onClick={() => openLocalPath(entry.target)}
+                              title="在文件管理器中打开"
+                            >
+                              <FolderOpen size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              className="history-action-btn danger"
+                              onClick={() => removeRecent(entry.id)}
+                              title="删除此记录"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="history-empty">
+                        <History size={36} />
+                        <h3>{recent.length ? '未找到符合条件的任务记录' : '暂无历史同步记录'}</h3>
+                        <p>
+                          {recent.length
+                            ? '请尝试更换搜索关键字或清除过滤器。'
+                            : '在单仓模式或多仓批量模式成功执行拉取/更新任务后，任务参数与执行结果将自动归档在此。'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
 
           <footer className="page-footer">
             <span>CODESYNC STUDIO // DESKTOP EDITION 1.3.0</span>
@@ -1837,29 +2012,15 @@ function BatchSyncPanel({
   batchSvnMainlineOnly,
   setBatchSvnMainlineOnly,
   batchItems,
-  filteredBatchItems,
-  batchFilter,
-  setBatchFilter,
   batchItemStatuses,
-  itemBranchOverrides,
-  onItemBranchChange,
   onApplyGlobalBranch,
-  batchRepoDataMap,
-  batchProbingMap,
-  batchProbeErrorMap,
-  onProbeSingle,
-  onProbeAll,
   batchRunning,
   protocolWarning,
   onStart,
   onRetryFailed,
-  onRunSingleItem,
-  onRemoveItem,
   onCleanUrls,
   onInsertSamples,
-  onImportUrls,
   onClearUrls
-  , onOpenFolder
 }) {
   const currentUrls = batchProvider === 'git' ? batchGitUrls : batchSvnUrls
   const setUrls = batchProvider === 'git' ? setBatchGitUrls : setBatchSvnUrls
@@ -1872,311 +2033,158 @@ function BatchSyncPanel({
           <p className="section-kicker">// STEP 01 CONFIGURATION</p>
           <h2>配置批量任务队列</h2>
         </div>
-        <span className="secure-label"><Check size={12} /> 队列化顺序调度</span>
+        <span className="secure-label"><Check size={12} /> 独立隔离调度</span>
       </div>
 
-      <div className="field-group">
-        <label className="field-title">版本控制引擎 (Git 与 SVN 独立隔离)</label>
-        <div className="segmented-control">
-          <button
-            type="button"
-            className={batchProvider === 'git' ? 'selected git-selected' : ''}
-            onClick={() => setBatchProvider('git')}
-            disabled={batchRunning}
-          >
-            <GitBranch size={16} /> Git 批量拉取
-          </button>
-          <button
-            type="button"
-            className={batchProvider === 'svn' ? 'selected svn-selected' : ''}
-            onClick={() => setBatchProvider('svn')}
-            disabled={batchRunning}
-          >
-            <Server size={16} /> SVN 批量拉取
-          </button>
-        </div>
-      </div>
-
-      <div className="field-group">
-        <div className="label-row">
-          <label className="field-title" htmlFor="batch-urls-input">
-            {batchProvider === 'git' ? 'Git 仓库地址列表' : 'SVN 仓库地址列表'}
-          </label>
-          <span>一行一个仓库 · 已解析 {batchItems.length} 项</span>
-        </div>
-        <div className="batch-textarea-wrap">
-          <textarea
-            id="batch-urls-input"
-            className="batch-textarea"
-            value={currentUrls}
-            onChange={(e) => setUrls(e.target.value)}
-            disabled={batchRunning}
-            placeholder={
-              batchProvider === 'git'
-                ? `每行输入一个 Git 仓库链接，支持在链接后指定特定分支，例如：\nhttps://github.com/organization/repo-one.git\nhttps://github.com/organization/repo-two.git dev\nhttps://github.com/organization/repo-three.git release-4.0\ngit@github.com:organization/repo-four.git#feature-login`
-                : `每行输入一个 SVN 仓库链接，支持在链接后指定修订号或分支，例如：\nhttps://svn.example.com/svn/project-a/trunk\nhttps://svn.example.com/svn/project-b/trunk 1024\nhttps://svn.example.com/svn/project-c@2048\nhttps://svn.example.com/svn/project-d/branches/v1.0`
-            }
-          />
-        </div>
-        <div className="batch-textarea-toolbar">
-          <div className="batch-textarea-actions">
-            <button type="button" className="batch-text-btn" onClick={onInsertSamples} disabled={batchRunning} title="插入测试样例链接"><Sparkles size={11} />样例链接</button>
-            <button type="button" className="batch-text-btn" onClick={onCleanUrls} disabled={batchRunning || !currentUrls.trim()} title="去除空行与重复链接"><RefreshCw size={11} />整理去重</button>
-          </div>
-          <button type="button" className="batch-text-btn" onClick={onClearUrls} disabled={batchRunning || !currentUrls.trim()} style={{ color: 'var(--crimson-text)' }} title="清空全部输入"><Trash2 size={11} />清空</button>
-        </div>
-        {protocolWarning && (
-          <div className="batch-alert warning">
-            <AlertCircle size={14} />
-            <span>{protocolWarning}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="field-group">
-        <div className="label-row">
-          <label className="field-title" htmlFor="batch-target-root">本地保存根目录</label>
-          <span>每个项目将自动在该根目录下创建独立子目录</span>
-        </div>
-        <div className="input-with-icon">
-          <FolderOpen size={15} />
-          <input
-            id="batch-target-root"
-            value={batchTargetRoot}
-            onChange={(e) => setBatchTargetRoot(e.target.value)}
-            disabled={batchRunning}
-            placeholder="例如：D:\\workspace\\my-projects"
-          />
-          <button onClick={browseBatchTargetRoot} title="浏览选择根目录" disabled={batchRunning}>
-            <FolderOpen size={15} />
-          </button>
-        </div>
-      </div>
-
-      <div className="batch-options-grid">
-        <div className="field-group" style={{ marginTop: 0 }}>
-          <label className="field-title" htmlFor="batch-conflict-select">目标目录已存在时策略</label>
-          <div className="select-wrap" style={{ marginTop: 7 }}>
-            <RefreshCw size={14} />
-            <select
-              id="batch-conflict-select"
-              value={batchConflictStrategy}
-              onChange={(e) => setBatchConflictStrategy(e.target.value)}
+      <div className="sync-panel-content">
+        <div className="field-group">
+          <label className="field-title">版本控制引擎 (Git 与 SVN 独立隔离)</label>
+          <div className="segmented-control">
+            <button
+              type="button"
+              className={batchProvider === 'git' ? 'selected git-selected' : ''}
+              onClick={() => setBatchProvider('git')}
               disabled={batchRunning}
             >
-              <option value="update">自动更新已有仓库 (智能增量同步)</option>
-              <option value="skip">跳过已存在的目录 (不覆盖)</option>
-              <option value="error">标记错误并继续下一项</option>
-            </select>
-            <ChevronDown size={14} />
+              <GitBranch size={16} /> Git 批量拉取
+            </button>
+            <button
+              type="button"
+              className={batchProvider === 'svn' ? 'selected svn-selected' : ''}
+              onClick={() => setBatchProvider('svn')}
+              disabled={batchRunning}
+            >
+              <Server size={16} /> SVN 批量拉取
+            </button>
           </div>
         </div>
 
-        {batchProvider === 'git' ? (
-          <div className="field-group" style={{ marginTop: 0 }}>
-            <div className="label-row">
-              <label className="field-title" htmlFor="batch-git-branch">全局默认分支 (可选)</label>
-              <button
-                type="button"
-                onClick={onApplyGlobalBranch}
-                disabled={batchRunning || !batchGitBranch.trim()}
-                style={{ fontSize: 10, color: 'var(--cyan-primary)', background: 'transparent', padding: 0 }}
-                title="将此分支应用到下方所有未指定的项目"
-              >
-                应用到全部
-              </button>
-            </div>
-            <div className="input-with-icon" style={{ marginTop: 7 }}>
-              <GitBranch size={14} />
-              <input
-                id="batch-git-branch"
-                value={batchGitBranch}
-                onChange={(e) => setBatchGitBranch(e.target.value)}
-                disabled={batchRunning}
-                placeholder="统一默认拉取分支 (留空拉取主线)"
-              />
-            </div>
+        <div className="field-group">
+          <div className="label-row">
+            <label className="field-title" htmlFor="batch-urls-input">
+              {batchProvider === 'git' ? 'Git 仓库地址列表' : 'SVN 仓库地址列表'}
+            </label>
+            <span>一行一个仓库 · 已解析 {batchItems.length} 项</span>
           </div>
-        ) : (
-          <div className="field-group" style={{ marginTop: 0 }}>
-            <label className="field-title">SVN 主线策略</label>
-            <div className={`mainline-option ${batchSvnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 7, minHeight: 42, padding: '8px 12px' }}>
-              <label className="toggle-line">
-                <input
-                  type="checkbox"
-                  checked={batchSvnMainlineOnly}
-                  onChange={(e) => setBatchSvnMainlineOnly(e.target.checked)}
-                  disabled={batchRunning}
-                />
-                <span className="fake-checkbox"><Check size={12} /></span>
-                <span className="mainline-copy">
-                  <b>仅拉取主线 trunk</b>
-                  <small>若未指定分支且链接包含 trunk 自动仅检出 trunk</small>
-                </span>
-              </label>
-            </div>
+          <div className="batch-textarea-wrap">
+            <textarea
+              id="batch-urls-input"
+              className="batch-textarea"
+              value={currentUrls}
+              onChange={(e) => setUrls(e.target.value)}
+              disabled={batchRunning}
+              placeholder={
+                batchProvider === 'git'
+                  ? "每行输入一个 Git 仓库链接，可在链接后指定分支，例如：\nhttps://github.com/organization/repo-one.git\nhttps://github.com/organization/repo-two.git dev\nhttps://github.com/organization/repo-three.git#release-4.0"
+                  : "每行输入一个 SVN 仓库链接，可在链接后指定分支或修订号，例如：\nhttps://svn.example.com/svn/project-a/trunk\nhttps://svn.example.com/svn/project-b/trunk 1024\nhttps://svn.example.com/svn/project-c@2048"
+              }
+            />
           </div>
-        )}
-      </div>
+          <div className="batch-textarea-toolbar">
+            <div className="batch-textarea-actions">
+              <button type="button" className="batch-text-btn" onClick={onInsertSamples} disabled={batchRunning} title="插入测试样例链接"><Sparkles size={11} />样例链接</button>
+              <button type="button" className="batch-text-btn" onClick={onCleanUrls} disabled={batchRunning || !currentUrls.trim()} title="去除空行与重复链接"><RefreshCw size={11} />整理去重</button>
+            </div>
+            <button type="button" className="batch-text-btn" onClick={onClearUrls} disabled={batchRunning || !currentUrls.trim()} style={{ color: 'var(--crimson-text)' }} title="清空全部输入"><Trash2 size={11} />清空</button>
+          </div>
+          {protocolWarning && (
+            <div className="batch-alert warning">
+              <AlertCircle size={14} />
+              <span>{protocolWarning}</span>
+            </div>
+          )}
+        </div>
 
-      {batchItems.length > 0 && (
-        <div className="batch-queue-container">
-          <div className="batch-queue-header">
-            <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个)</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div className="input-with-icon" style={{ height: 26, padding: '0 8px', fontSize: 11 }}>
-                <Filter size={11} />
+        <div className="field-group">
+          <div className="label-row">
+            <label className="field-title" htmlFor="batch-target-root">本地保存根目录</label>
+            <span>每个项目将自动在该根目录下创建独立子目录</span>
+          </div>
+          <div className="input-with-icon">
+            <FolderOpen size={15} />
+            <input
+              id="batch-target-root"
+              value={batchTargetRoot}
+              onChange={(e) => setBatchTargetRoot(e.target.value)}
+              disabled={batchRunning}
+              placeholder="例如：D:\\workspace\\my-projects"
+            />
+            <button onClick={browseBatchTargetRoot} title="浏览选择根目录" disabled={batchRunning}>
+              <FolderOpen size={15} />
+            </button>
+          </div>
+        </div>
+
+        <div className="batch-options-grid">
+          <div className="field-group" style={{ marginTop: 0 }}>
+            <label className="field-title" htmlFor="batch-conflict-select">目标目录已存在策略</label>
+            <div className="select-wrap" style={{ marginTop: 7 }}>
+              <RefreshCw size={14} />
+              <select
+                id="batch-conflict-select"
+                value={batchConflictStrategy}
+                onChange={(e) => setBatchConflictStrategy(e.target.value)}
+                disabled={batchRunning}
+              >
+                <option value="update">自动更新已有仓库 (智能增量同步)</option>
+                <option value="skip">跳过已存在的目录 (不覆盖)</option>
+                <option value="error">标记错误并继续下一项</option>
+              </select>
+              <ChevronDown size={14} />
+            </div>
+          </div>
+
+          {batchProvider === 'git' ? (
+            <div className="field-group" style={{ marginTop: 0 }}>
+              <div className="label-row">
+                <label className="field-title" htmlFor="batch-git-branch">全局默认分支 (可选)</label>
+                <button
+                  type="button"
+                  onClick={onApplyGlobalBranch}
+                  disabled={batchRunning || !batchGitBranch.trim()}
+                  style={{ fontSize: 11, color: 'var(--cyan-primary)', background: 'transparent', padding: 0 }}
+                  title="将此分支应用到右侧所有未指定分支的项目"
+                >
+                  应用到全部
+                </button>
+              </div>
+              <div className="input-with-icon" style={{ marginTop: 7 }}>
+                <GitBranch size={14} />
                 <input
-                  placeholder="过滤项目名/分支..."
-                  value={batchFilter}
-                  onChange={(e) => setBatchFilter(e.target.value)}
-                  style={{ fontSize: 11 }}
+                  id="batch-git-branch"
+                  value={batchGitBranch}
+                  onChange={(e) => setBatchGitBranch(e.target.value)}
+                  disabled={batchRunning}
+                  placeholder="统一默认拉取分支 (留空拉取主线)"
                 />
               </div>
-              <button
-                type="button"
-                className="batch-fetch-all-btn"
-                onClick={onProbeAll}
-                disabled={batchRunning}
-                title="读取所有仓库的可选分支、标签和修订版本"
-              >
-                <Search size={11} />
-                批量读取版本
-              </button>
             </div>
-          </div>
-          <div className="batch-queue-col-headers">
-            <span>#</span>
-            <span>项目名称</span>
-            <span>版本/分支下拉选择</span>
-            <span>目标目录</span>
-            <span style={{ textAlign: 'center' }}>执行状态</span>
-            <span style={{ textAlign: 'center' }}>操作</span>
-          </div>
-          <div className="batch-queue-list">
-            {(filteredBatchItems || batchItems).map((item, index) => {
-              const itemState = batchItemStatuses[item.id] || { status: 'idle', error: '', action: 'pull' }
-              const statusClass = itemState.status
-              const statusLabel =
-                statusClass === 'running' ? (itemState.action === 'update' ? '更新中' : '拉取中') :
-                statusClass === 'success' ? (itemState.action === 'update' ? '已更新' : '已拉取') :
-                statusClass === 'error' ? '失败' :
-                statusClass === 'skipped' ? '跳过' : '等待'
-
-              const repoData = batchRepoDataMap[item.url]
-              const isProbing = Boolean(batchProbingMap[item.url])
-              const probeErr = batchProbeErrorMap[item.url]
-              const versionOptions = getRepoVersionOptions(repoData, batchProvider)
-
-              const currentVal = itemBranchOverrides[item.id] !== undefined
-                ? itemBranchOverrides[item.id]
-                : (item.parsedBranch || 'default')
-
-              return (
-                <div key={item.id} className={`batch-queue-item ${statusClass}`}>
-                  <span className="batch-item-index">#{index + 1}</span>
-                  <span className="batch-item-name" title={item.name}>{item.name}</span>
-
-                  <div className="batch-version-select-wrap">
-                    {isProbing ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--cyan-primary)', fontSize: 10 }}>
-                        <LoaderCircle size={11} className="spin" />
-                        <span>读取中...</span>
-                      </div>
-                    ) : (
-                      <select
-                        className="batch-version-select"
-                        value={currentVal}
-                        onChange={(e) => onItemBranchChange(item.id, e.target.value)}
-                        disabled={batchRunning}
-                        title={probeErr ? `读取失败: ${probeErr}` : currentVal && currentVal !== 'default' ? `已选版本：${currentVal}` : '下拉选择拉取的版本'}
-                      >
-                        <option value="default">
-                          {batchProvider === 'git'
-                            ? (repoData?.defaultBranch ? `默认主线 (${repoData.defaultBranch})` : '默认主线 (HEAD)')
-                            : (repoData?.latestRevision ? `最新版本 (r${repoData.latestRevision})` : '最新版本 (HEAD)')}
-                        </option>
-
-                        {item.parsedBranch && !versionOptions.some((o) => o.name === item.parsedBranch || o.id === item.parsedBranch) && (
-                          <option value={item.parsedBranch}>链接指定 · {item.parsedBranch}</option>
-                        )}
-
-                        {versionOptions.some((o) => o.kind === 'branch') && (
-                          <optgroup label="分支 (Branches)">
-                            {versionOptions.filter((o) => o.kind === 'branch').map((opt) => (
-                              <option key={opt.id} value={opt.name}>{opt.label}</option>
-                            ))}
-                          </optgroup>
-                        )}
-
-                        {versionOptions.some((o) => o.kind === 'tag') && (
-                          <optgroup label="标签 (Tags)">
-                            {versionOptions.filter((o) => o.kind === 'tag').map((opt) => (
-                              <option key={opt.id} value={opt.name}>{opt.label}</option>
-                            ))}
-                          </optgroup>
-                        )}
-
-                        {versionOptions.some((o) => o.kind === 'dir') && (
-                          <optgroup label="目录 / 标签 (Directories)">
-                            {versionOptions.filter((o) => o.kind === 'dir').map((opt) => (
-                              <option key={opt.id} value={`dir:${opt.subPath}`}>{opt.label}</option>
-                            ))}
-                          </optgroup>
-                        )}
-
-                        {versionOptions.some((o) => o.kind === 'rev') && (
-                          <optgroup label="历史修订版本 (Revisions)">
-                            {versionOptions.filter((o) => o.kind === 'rev').map((opt) => (
-                              <option key={opt.id} value={`rev:${opt.revision}`}>{opt.label}</option>
-                            ))}
-                          </optgroup>
-                        )}
-                      </select>
-                    )}
-
-                    <button
-                      type="button"
-                      className="batch-probe-btn"
-                      onClick={() => onProbeSingle(item.url)}
-                      disabled={batchRunning || isProbing}
-                      title={probeErr ? `读取失败: ${probeErr}` : repoData ? '重新读取版本' : '读取该仓库分支与版本'}
-                    >
-                      {isProbing ? <LoaderCircle size={11} className="spin" /> : <Search size={11} />}
-                    </button>
-                  </div>
-
-                  <span className="batch-item-target" title={item.target}>{item.target}</span>
-                  <span className={`batch-status-badge ${statusClass}`} title={itemState.error || ''}>
-                    {statusClass === 'running' && <LoaderCircle size={9} className="spin" />}
-                    {statusClass === 'success' && <Check size={9} />}
-                    {statusClass === 'error' && <AlertCircle size={9} />}
-                    {statusLabel}
+          ) : (
+            <div className="field-group" style={{ marginTop: 0 }}>
+              <label className="field-title">SVN 主线策略</label>
+              <div className={`mainline-option ${batchSvnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 7, minHeight: 42, padding: '8px 12px' }}>
+                <label className="toggle-line">
+                  <input
+                    type="checkbox"
+                    checked={batchSvnMainlineOnly}
+                    onChange={(e) => setBatchSvnMainlineOnly(e.target.checked)}
+                    disabled={batchRunning}
+                  />
+                  <span className="fake-checkbox"><Check size={12} /></span>
+                  <span className="mainline-copy">
+                    <b>仅拉取主线 trunk</b>
+                    <small>若未指定分支且链接包含 trunk 自动仅检出 trunk</small>
                   </span>
-
-                  <div className="batch-item-actions">
-                    {statusClass === 'success' && (
-                      <button type="button" className="batch-icon-action" onClick={() => onOpenFolder(item.target)} title="打开本地文件夹">
-                        <FolderOpen size={12} />
-                      </button>
-                    )}
-                    <button type="button" className="batch-icon-action" onClick={() => onRunSingleItem(item)} disabled={batchRunning} title="单独拉取/更新该项">
-                      <Play size={11} />
-                    </button>
-                    <button type="button" className="batch-icon-action danger" onClick={() => onRemoveItem(item)} disabled={batchRunning} title="从列表中移除">
-                      <X size={12} />
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+                </label>
+              </div>
+            </div>
+          )}
         </div>
-      )}
 
-      <div className="execution-note">
-        <Info size={14} />
-        <span>支持独立版本选择：点击“批量读取版本”或单项放大镜，即可为每个仓库单独挑选指定分支、Tag 标签或历史修订版。</span>
+        <div className="execution-note">
+          <Info size={14} />
+          <span>在右侧可直接查看解析清单，支持独立下拉选择分支、批量预检及单独执行。</span>
+        </div>
       </div>
 
       <div className="panel-actions">
@@ -2207,7 +2215,31 @@ function BatchSyncPanel({
   )
 }
 
-function BatchTaskPanel({ progress, running, elapsedSeconds, cancelTask, clearLogs }) {
+function BatchTaskPanel({
+  progress,
+  running,
+  elapsedSeconds,
+  cancelTask,
+  clearLogs,
+  batchItems,
+  filteredBatchItems,
+  batchFilter,
+  setBatchFilter,
+  batchItemStatuses,
+  itemBranchOverrides,
+  onItemBranchChange,
+  batchRepoDataMap,
+  batchProbingMap,
+  batchProbeErrorMap,
+  onProbeSingle,
+  onProbeAll,
+  batchProvider,
+  onRunSingleItem,
+  onRemoveItem,
+  onOpenFolder,
+  batchViewMode,
+  setBatchViewMode
+}) {
   const terminalRef = useRef(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [onlyErrors, setOnlyErrors] = useState(false)
@@ -2240,16 +2272,248 @@ function BatchTaskPanel({ progress, running, elapsedSeconds, cancelTask, clearLo
     progress.status === 'cancelled' ? 'idle' :
     running ? 'running' : 'idle'
 
+  const renderQueue = (isSplit = false) => (
+    <div className={`batch-queue-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
+      <div className="batch-queue-header">
+        <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个)</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="input-with-icon" style={{ height: 26, padding: '0 8px', fontSize: 11 }}>
+            <Filter size={11} />
+            <input
+              placeholder="过滤项目名/分支..."
+              value={batchFilter}
+              onChange={(e) => setBatchFilter(e.target.value)}
+              style={{ fontSize: 11 }}
+            />
+          </div>
+          <button
+            type="button"
+            className="batch-fetch-all-btn"
+            onClick={onProbeAll}
+            disabled={running}
+            title="读取所有仓库的可选分支、标签和修订版本"
+          >
+            <Search size={11} />
+            批量读取版本
+          </button>
+        </div>
+      </div>
+      <div className="batch-queue-col-headers">
+        <span>#</span>
+        <span>项目名称</span>
+        <span>版本/分支下拉选择</span>
+        <span>目标目录</span>
+        <span style={{ textAlign: 'center' }}>执行状态</span>
+        <span style={{ textAlign: 'center' }}>操作</span>
+      </div>
+      <div className="batch-queue-list">
+        {(filteredBatchItems || batchItems).length ? (
+          (filteredBatchItems || batchItems).map((item, index) => {
+            const itemState = batchItemStatuses[item.id] || { status: 'idle', error: '', action: 'pull' }
+            const itemStatusClass = itemState.status
+            const itemStatusLabel =
+              itemStatusClass === 'running' ? (itemState.action === 'update' ? '更新中' : '拉取中') :
+              itemStatusClass === 'success' ? (itemState.action === 'update' ? '已更新' : '已拉取') :
+              itemStatusClass === 'error' ? '失败' :
+              itemStatusClass === 'skipped' ? '跳过' : '等待'
+
+            const repoData = batchRepoDataMap[item.url]
+            const isProbing = Boolean(batchProbingMap[item.url])
+            const probeErr = batchProbeErrorMap[item.url]
+            const versionOptions = getRepoVersionOptions(repoData, batchProvider)
+
+            const currentVal = itemBranchOverrides[item.id] !== undefined
+              ? itemBranchOverrides[item.id]
+              : (item.parsedBranch || 'default')
+
+            return (
+              <div key={item.id} className={`batch-queue-item ${itemStatusClass}`}>
+                <span className="batch-item-index">#{index + 1}</span>
+                <span className="batch-item-name" title={item.name}>{item.name}</span>
+
+                <div className="batch-version-select-wrap">
+                  {isProbing ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--cyan-primary)', fontSize: 11 }}>
+                      <LoaderCircle size={11} className="spin" />
+                      <span>读取中..</span>
+                    </div>
+                  ) : (
+                    <select
+                      className="batch-version-select"
+                      value={currentVal}
+                      onChange={(e) => onItemBranchChange(item.id, e.target.value)}
+                      disabled={running}
+                      title={probeErr ? `读取失败: ${probeErr}` : currentVal && currentVal !== 'default' ? `已选版本：${currentVal}` : '下拉选择拉取的版本'}
+                    >
+                      <option value="default">
+                        {batchProvider === 'git'
+                          ? (repoData?.defaultBranch ? `默认主线 (${repoData.defaultBranch})` : '默认主线 (HEAD)')
+                          : (repoData?.latestRevision ? `最新版本 (r${repoData.latestRevision})` : '最新版本 (HEAD)')}
+                      </option>
+
+                      {item.parsedBranch && !versionOptions.some((o) => o.name === item.parsedBranch || o.id === item.parsedBranch) && (
+                        <option value={item.parsedBranch}>链接指定 · {item.parsedBranch}</option>
+                      )}
+
+                      {versionOptions.some((o) => o.kind === 'branch') && (
+                        <optgroup label="分支 (Branches)">
+                          {versionOptions.filter((o) => o.kind === 'branch').map((opt) => (
+                            <option key={opt.id} value={opt.name}>{opt.label}</option>
+                          ))}
+                        </optgroup>
+                      )}
+
+                      {versionOptions.some((o) => o.kind === 'tag') && (
+                        <optgroup label="标签 (Tags)">
+                          {versionOptions.filter((o) => o.kind === 'tag').map((opt) => (
+                            <option key={opt.id} value={opt.name}>{opt.label}</option>
+                          ))}
+                        </optgroup>
+                      )}
+
+                      {versionOptions.some((o) => o.kind === 'dir') && (
+                        <optgroup label="目录 / 标签 (Directories)">
+                          {versionOptions.filter((o) => o.kind === 'dir').map((opt) => (
+                            <option key={opt.id} value={`dir:${opt.subPath}`}>{opt.label}</option>
+                          ))}
+                        </optgroup>
+                      )}
+
+                      {versionOptions.some((o) => o.kind === 'rev') && (
+                        <optgroup label="历史修订版本 (Revisions)">
+                          {versionOptions.filter((o) => o.kind === 'rev').map((opt) => (
+                            <option key={opt.id} value={`rev:${opt.revision}`}>{opt.label}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  )}
+
+                  <button
+                    type="button"
+                    className="batch-probe-btn"
+                    onClick={() => onProbeSingle(item.url)}
+                    disabled={running || isProbing}
+                    title={probeErr ? `读取失败: ${probeErr}` : repoData ? '重新读取版本' : '读取该仓库分支与版本'}
+                  >
+                    {isProbing ? <LoaderCircle size={11} className="spin" /> : <Search size={11} />}
+                  </button>
+                </div>
+
+                <span className="batch-item-target" title={item.target}>{item.target}</span>
+                <span className={`batch-status-badge ${itemStatusClass}`} title={itemState.error || ''}>
+                  {itemStatusClass === 'running' && <LoaderCircle size={9} className="spin" />}
+                  {itemStatusClass === 'success' && <Check size={9} />}
+                  {itemStatusClass === 'error' && <AlertCircle size={9} />}
+                  {itemStatusLabel}
+                </span>
+
+                <div className="batch-item-actions">
+                  {itemStatusClass === 'success' && (
+                    <button type="button" className="batch-icon-action" onClick={() => onOpenFolder(item.target)} title="打开本地文件夹">
+                      <FolderOpen size={12} />
+                    </button>
+                  )}
+                  <button type="button" className="batch-icon-action" onClick={() => onRunSingleItem(item)} disabled={running} title="单独拉取/更新该项">
+                    <Play size={11} />
+                  </button>
+                  <button type="button" className="batch-icon-action danger" onClick={() => onRemoveItem(item)} disabled={running} title="从列表中移除">
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+            )
+          })
+        ) : (
+          <div className="batch-queue-empty">
+            <Layers size={22} />
+            <span>暂未解析到仓库地址</span>
+            <small>在左侧文本框中输入或粘贴仓库链接后，列表将自动生成</small>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  const renderTerminal = (isSplit = false) => (
+    <div className={`batch-terminal-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
+      <div className="log-heading">
+        <span><Terminal size={13} />批量命令实时流</span>
+        <div className="log-tools">
+          <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
+            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部输出' : '仅看错误'}
+          </button>
+          <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
+            {autoScroll ? '锁定滚动' : '跟随滚动'}
+          </button>
+          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制日志</button>
+          <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+        </div>
+      </div>
+
+      <div className="terminal-window">
+        <div className="terminal-header-dots">
+          <span className="terminal-dot red" />
+          <span className="terminal-dot yellow" />
+          <span className="terminal-dot green" />
+          <span style={{ fontSize: '11px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync ~ batch-queue</span>
+        </div>
+        <div className="terminal-output" ref={terminalRef}>
+          {filteredLogs.length ? (
+            filteredLogs.map((line, index) => (
+              <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
+                <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
+                <span>{line.text}</span>
+              </div>
+            ))
+          ) : (
+            <div className="terminal-placeholder">
+              <Terminal size={22} />
+              <span>等待批量任务启动...</span>
+              <small>各仓库的拉取输出流会在此有序滚动呈现</small>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
   return (
     <div className="task-panel panel">
       <div className="panel-heading">
         <div>
-          <p className="section-kicker">// STEP 02 TELEMETRY & CONSOLE</p>
-          <h2>批量队列遥测</h2>
+          <p className="section-kicker">// STEP 02 QUEUE & TELEMETRY</p>
+          <h2>批量队列与实时遥测</h2>
         </div>
-        <span className={`status-pill ${statusClass}`}>
-          <i />{statusLabel}
-        </span>
+        <div className="batch-view-segmented">
+          <button
+            type="button"
+            className={`batch-view-btn ${batchViewMode === 'queue' ? 'active' : ''}`}
+            onClick={() => setBatchViewMode('queue')}
+            title="全屏查看待拉取仓库清单"
+          >
+            <Layers size={12} />
+            <span>清单 ({batchItems.length})</span>
+          </button>
+          <button
+            type="button"
+            className={`batch-view-btn ${batchViewMode === 'telemetry' ? 'active' : ''}`}
+            onClick={() => setBatchViewMode('telemetry')}
+            title="全屏查看命令行实时日志"
+          >
+            <Terminal size={12} />
+            <span>终端遥测</span>
+          </button>
+          <button
+            type="button"
+            className={`batch-view-btn ${batchViewMode === 'split' ? 'active' : ''}`}
+            onClick={() => setBatchViewMode('split')}
+            title="分屏对照查看清单与终端"
+          >
+            <Columns2 size={12} />
+            <span>分屏对照</span>
+          </button>
+        </div>
       </div>
 
       <div className="progress-overview">
@@ -2270,7 +2534,7 @@ function BatchTaskPanel({ progress, running, elapsedSeconds, cancelTask, clearLo
         <div className="progress-copy">
           <b>{progress.label}</b>
           <div className="batch-stats-row">
-            <span className="batch-stats-item">总计: <b>{progress.totalCount || 0}</b></span>
+            <span className="batch-stats-item">总计: <b>{progress.totalCount || batchItems.length}</b></span>
             <span className="batch-stats-item success">成功: <b>{progress.successCount || 0}</b></span>
             <span className="batch-stats-item error">失败: <b>{progress.errorCount || 0}</b></span>
             <span className="batch-stats-item skipped">跳过: <b>{progress.skippedCount || 0}</b></span>
@@ -2282,43 +2546,15 @@ function BatchTaskPanel({ progress, running, elapsedSeconds, cancelTask, clearLo
         <span style={{ width: `${Math.max(0, Math.min(100, progress.value))}%` }} />
       </div>
 
-      <div className="log-heading">
-        <span><Terminal size={13} />批量命令实时流</span>
-        <div className="log-tools">
-          <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
-            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部输出' : '仅看错误'}
-          </button>
-          <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
-            {autoScroll ? '锁定滚动' : '跟随滚动'}
-          </button>
-          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制日志</button>
-          <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
-        </div>
-      </div>
-
-      <div className="terminal-window">
-        <div className="terminal-header-dots">
-          <span className="terminal-dot red" />
-          <span className="terminal-dot yellow" />
-          <span className="terminal-dot green" />
-          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync ~ batch-queue</span>
-        </div>
-        <div className="terminal-output" ref={terminalRef}>
-          {filteredLogs.length ? (
-            filteredLogs.map((line, index) => (
-              <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
-                <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
-                <span>{line.text}</span>
-              </div>
-            ))
-          ) : (
-            <div className="terminal-placeholder">
-              <Terminal size={22} />
-              <span>等待批量任务启动...</span>
-              <small>各仓库的拉取输出流会在此有序滚动呈现</small>
-            </div>
-          )}
-        </div>
+      <div className="batch-views-body">
+        {batchViewMode === 'queue' && renderQueue(false)}
+        {batchViewMode === 'telemetry' && renderTerminal(false)}
+        {batchViewMode === 'split' && (
+          <div className="batch-split-layout">
+            {renderQueue(true)}
+            {renderTerminal(true)}
+          </div>
+        )}
       </div>
 
       <div className="task-bottom">
@@ -2327,14 +2563,13 @@ function BatchTaskPanel({ progress, running, elapsedSeconds, cancelTask, clearLo
           <button className="stop-button" onClick={cancelTask}><Square size={13} />停止批量任务</button>
         ) : (
           <span style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Play size={11} />开始后保持窗口打开
+            <Play size={11} />执行期间请保持应用窗口开启
           </span>
         )}
       </div>
     </div>
   )
 }
-
 function CredentialDialog({ tab, setTab, status, form, saving, testing, testMessage, onChange, onBrowseKey, onSave, onTest, onClear, onClose }) {
   const git = form.git
   const svn = form.svn

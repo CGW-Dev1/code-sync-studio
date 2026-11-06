@@ -6,6 +6,9 @@ const os = require('os')
 const path = require('path')
 const { URL } = require('url')
 
+app.commandLine.appendSwitch('enable-font-antialiasing')
+app.commandLine.appendSwitch('high-dpi-support', '1')
+
 let mainWindow
 let activeJob = null
 let credentialStore = null
