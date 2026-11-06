@@ -1967,7 +1967,7 @@ function App() {
           )}
 
           <footer className="page-footer">
-            <span>CODESYNC STUDIO // DESKTOP EDITION 1.3.0</span>
+            <span>CODESYNC STUDIO // DESKTOP EDITION 1.3.1</span>
             <span>核心状态：GIT CLI READY · SVN CLI READY · LOCAL ENCRYPTION ACTIVE</span>
           </footer>
         </div>
