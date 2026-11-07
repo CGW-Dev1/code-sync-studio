@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, safeStorage, shell } = require('electron')
 const { spawn } = require('child_process')
 const crypto = require('crypto')
 const fs = require('fs')
@@ -613,6 +613,252 @@ async function inspectLocal({ target }) {
   throw new Error('目标目录不是可识别的 Git 或 SVN 工作副本。')
 }
 
+function scanPlainDirectoryFiles(rootDir, maxCount = 200) {
+  const results = []
+  const ignoreSet = new Set(['.git', '.svn', 'node_modules', 'dist', 'build', '.next', 'out'])
+  function walk(currentDir) {
+    if (results.length >= maxCount) return
+    let entries = []
+    try { entries = fs.readdirSync(currentDir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (results.length >= maxCount) break
+      if (ignoreSet.has(entry.name)) continue
+      const fullPath = path.join(currentDir, entry.name)
+      const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/')
+      if (entry.isDirectory()) {
+        walk(fullPath)
+      } else {
+        results.push({ path: relPath, displayPath: relPath, status: 'U', label: '待新增', staged: false })
+      }
+    }
+  }
+  walk(rootDir)
+  return results
+}
+
+async function inspectPushWorkspace({ target }) {
+  if (!target || !target.trim()) throw new Error('请先选择或输入本地项目目录。')
+  const cleanTarget = target.trim()
+  if (!fs.existsSync(cleanTarget)) throw new Error('本地项目目录不存在，请检查路径是否正确。')
+  const stat = fs.statSync(cleanTarget)
+  if (!stat.isDirectory()) throw new Error('所选路径不是有效文件夹。')
+
+  try {
+    const topResult = await capture('git', ['-C', cleanTarget, 'rev-parse', '--show-toplevel'], cleanTarget)
+    const root = topResult.stdout.trim() || cleanTarget
+    const branchRes = await capture('git', ['-C', cleanTarget, 'branch', '--show-current'], cleanTarget).catch(() => ({ stdout: '' }))
+    const symRefRes = !branchRes.stdout.trim()
+      ? await capture('git', ['-C', cleanTarget, 'symbolic-ref', '--short', 'HEAD'], cleanTarget).catch(() => ({ stdout: '' }))
+      : { stdout: '' }
+    const branch = branchRes.stdout.trim() || symRefRes.stdout.trim() || 'main'
+    const branchesRes = await capture('git', ['-C', cleanTarget, 'branch', '--format=%(refname:short)'], cleanTarget).catch(() => ({ stdout: '' }))
+    const branchList = branchesRes.stdout.split(/\r?\n/).map((b) => b.trim()).filter(Boolean)
+    if (!branchList.includes(branch)) branchList.unshift(branch)
+    const remoteRes = await capture('git', ['-C', cleanTarget, 'config', '--get', 'remote.origin.url'], cleanTarget).catch(() => ({ stdout: '' }))
+    const url = remoteRes.stdout.trim()
+
+    let ahead = 0
+    let behind = 0
+    try {
+      const abRes = await capture('git', ['-C', cleanTarget, 'rev-list', '--left-right', '--count', 'HEAD...@{u}'], cleanTarget)
+      const parts = abRes.stdout.trim().split(/\s+/)
+      ahead = Number(parts[0]) || 0
+      behind = Number(parts[1]) || 0
+    } catch {
+      if (url && branch) {
+        try {
+          const aheadRes = await capture('git', ['-C', cleanTarget, 'rev-list', '--count', `origin/${branch}..HEAD`], cleanTarget)
+          ahead = Number(aheadRes.stdout.trim()) || 0
+        } catch {}
+      }
+    }
+
+    const lastCommitRes = await capture('git', ['-C', cleanTarget, 'log', '-1', '--pretty=format:%h · %s (%cr)'], cleanTarget).catch(() => ({ stdout: '' }))
+    const statusRes = await capture('git', ['-c', 'core.quotePath=false', '-C', cleanTarget, 'status', '--porcelain=v1', '-uall'], cleanTarget).catch(() => ({ stdout: '' }))
+    const changes = statusRes.stdout
+      .split(/\r?\n/)
+      .filter((line) => line.length > 3)
+      .map((line) => {
+        const xy = line.slice(0, 2)
+        const rawPath = line.slice(3).trim().replace(/^"+|"+$/g, '')
+        const cleanFile = rawPath.includes(' -> ') ? rawPath.split(' -> ').pop().trim().replace(/^"+|"+$/g, '') : rawPath
+        let status = 'M'
+        let label = '已修改'
+        if (xy === '??') { status = 'U'; label = '未跟踪' }
+        else if (xy.includes('D')) { status = 'D'; label = '已删除' }
+        else if (xy.includes('A')) { status = 'A'; label = '新增' }
+        else if (xy.includes('R')) { status = 'R'; label = '重命名' }
+        else if (xy.includes('U')) { status = 'C'; label = '冲突' }
+        return {
+          path: cleanFile,
+          displayPath: rawPath,
+          status,
+          label,
+          staged: xy[0] !== ' ' && xy[0] !== '?'
+        }
+      })
+
+    return {
+      provider: 'git',
+      initialized: true,
+      root,
+      branch,
+      branches: branchList,
+      url,
+      ahead,
+      behind,
+      lastCommit: lastCommitRes.stdout.trim(),
+      changes
+    }
+  } catch {}
+
+  try {
+    const infoRes = await capture('svn', ['info', '--xml', cleanTarget], cleanTarget)
+    const info = parseSvnInfo(infoRes.stdout)
+    const statusRes = await capture('svn', ['status', '--xml', cleanTarget], cleanTarget).catch(() => ({ stdout: '' }))
+    const changes = []
+    const entryMatches = statusRes.stdout.match(/<entry\s+path="[^"]+"[\s\S]*?<\/entry>/gi) || []
+    for (const block of entryMatches) {
+      const entryPath = xmlAttr(block, 'path')
+      const wcMatch = block.match(/<wc-status[^>]*>/i)?.[0] || ''
+      const item = xmlAttr(wcMatch, 'item').toLowerCase()
+      if (!entryPath || ['normal', 'none', 'ignored', 'external'].includes(item)) continue
+      const rel = path.relative(cleanTarget, entryPath).replace(/\\/g, '/')
+      if (!rel || rel === '.') continue
+      let status = 'M'
+      let label = '已修改'
+      if (item === 'unversioned') { status = 'U'; label = '未受控' }
+      else if (item === 'added') { status = 'A'; label = '新增' }
+      else if (item === 'deleted' || item === 'missing') { status = 'D'; label = item === 'missing' ? '缺失' : '已删除' }
+      else if (item === 'conflicted') { status = 'C'; label = '冲突' }
+      changes.push({ path: rel, displayPath: rel, status, label, item, staged: item !== 'unversioned' })
+    }
+    return {
+      provider: 'svn',
+      initialized: true,
+      root: cleanTarget,
+      branch: 'HEAD',
+      branches: ['HEAD'],
+      url: info.url || '',
+      revision: info.revision || 'HEAD',
+      ahead: 0,
+      behind: 0,
+      lastCommit: info.revision ? `r${info.revision}` : '',
+      changes
+    }
+  } catch {}
+
+  const plainFiles = scanPlainDirectoryFiles(cleanTarget)
+  return {
+    provider: null,
+    initialized: false,
+    root: cleanTarget,
+    branch: 'main',
+    branches: ['main', 'master'],
+    url: '',
+    ahead: 0,
+    behind: 0,
+    lastCommit: '',
+    changes: plainFiles
+  }
+}
+
+async function getWorkspaceDiff({ provider, target, filePath }) {
+  if (!target || !fs.existsSync(target)) throw new Error('本地项目目录不存在。')
+  const cleanTarget = target.trim()
+  if (provider === 'svn') {
+    const args = ['diff']
+    if (filePath) args.push(path.join(cleanTarget, filePath))
+    else args.push(cleanTarget)
+    const res = await capture('svn', args, cleanTarget).catch((e) => ({ stdout: e.message || '' }))
+    return { diff: stripAnsi(res.stdout || '').trim() || '暂无可显示的差异内容（可能是新增未受控文件或二进制文件）。' }
+  }
+  const args = ['-c', 'core.quotePath=false', '-C', cleanTarget, 'diff', 'HEAD']
+  if (filePath) args.push('--', filePath)
+  const res = await capture('git', args, cleanTarget).catch(() => ({ stdout: '' }))
+  let diffText = stripAnsi(res.stdout || '').trim()
+  if (!diffText && filePath) {
+    const full = path.join(cleanTarget, filePath)
+    if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+      try {
+        const content = fs.readFileSync(full, 'utf8').slice(0, 6000)
+        diffText = `--- /dev/null\n+++ b/${filePath}\n${content.split(/\r?\n/).map((l) => `+${l}`).join('\n')}`
+      } catch {}
+    }
+  }
+  return { diff: diffText || '暂无可显示的差异内容。' }
+}
+
+async function scanLocalRepos({ rootDir }) {
+  if (!rootDir || !rootDir.trim()) throw new Error('请先选择要扫描的本地根目录。')
+  const cleanRoot = rootDir.trim()
+  if (!fs.existsSync(cleanRoot)) throw new Error('所选目录不存在。')
+
+  const repoDirs = []
+  const ignoreDirs = new Set(['.git', '.svn', 'node_modules', 'dist', 'build', '.next', 'out', 'release-portable', 'release-installer-codesync'])
+
+  function discover(dir, depth = 0) {
+    if (depth > 2 || repoDirs.length >= 60) return
+    let hasGit = false
+    let hasSvn = false
+    try {
+      hasGit = fs.existsSync(path.join(dir, '.git'))
+      hasSvn = !hasGit && fs.existsSync(path.join(dir, '.svn'))
+    } catch {}
+    if (hasGit || hasSvn) {
+      repoDirs.push({ path: dir, name: path.basename(dir) || dir, provider: hasGit ? 'git' : 'svn' })
+      return
+    }
+    let entries = []
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || ignoreDirs.has(entry.name) || entry.name.startsWith('.')) continue
+      discover(path.join(dir, entry.name), depth + 1)
+    }
+  }
+
+  discover(cleanRoot, 0)
+
+  const results = []
+  const concurrency = 4
+  let idx = 0
+  const workers = Array.from({ length: Math.min(concurrency, repoDirs.length) }, async () => {
+    while (idx < repoDirs.length) {
+      const item = repoDirs[idx++]
+      try {
+        const info = await inspectPushWorkspace({ target: item.path })
+        results.push({
+          id: item.path,
+          name: item.name,
+          target: item.path,
+          provider: info.provider || item.provider,
+          branch: info.branch || (item.provider === 'svn' ? `r${info.revision || 'HEAD'}` : 'main'),
+          url: info.url || '',
+          changesCount: info.changes?.length || 0,
+          ahead: info.ahead || 0,
+          behind: info.behind || 0,
+          lastCommit: info.lastCommit || ''
+        })
+      } catch {
+        results.push({
+          id: item.path,
+          name: item.name,
+          target: item.path,
+          provider: item.provider,
+          branch: 'HEAD',
+          url: '',
+          changesCount: 0,
+          ahead: 0,
+          behind: 0,
+          lastCommit: ''
+        })
+      }
+    }
+  })
+  await Promise.all(workers)
+  return { rootDir: cleanRoot, repositories: results }
+}
+
 function emitLine(jobId, text, source = 'stdout') {
   const clean = stripAnsi(text).replace(/\r/g, '').trimEnd()
   if (!clean) return
@@ -664,13 +910,150 @@ async function runTask(payload) {
   if (activeJob) throw new Error('已有任务正在执行，请等待当前任务完成。')
   const jobId = crypto.randomUUID()
   activeJob = { jobId, child: null }
-  const { provider, action, url, target, version, path: browsePath } = payload
+  const {
+    provider,
+    action,
+    url,
+    target,
+    version,
+    path: browsePath,
+    branch: pushBranchInput,
+    commitMessage,
+    commitChanges,
+    selectedFiles,
+    pushForce,
+    pushTags,
+    pullBeforePush,
+    autoInit,
+    shallowClone,
+    recurseSubmodules
+  } = payload
   const taskOptions = { targetUrl: url }
   const svnUrl = provider === 'svn' ? normalizeSvnUrl(url) : url
   const sparsePath = typeof browsePath === 'string' ? browsePath.replace(/^\/+|\/+$/g, '') : ''
-  sendTaskEvent({ type: 'start', jobId, label: action === 'pull' ? '开始拉取' : '开始更新', provider, action })
+  const startLabel = action === 'pull' ? '开始拉取' : action === 'push' ? '开始推送' : '开始更新'
+  sendTaskEvent({ type: 'start', jobId, label: startLabel, provider, action })
   try {
-    if (provider === 'git' && action === 'pull') {
+    if (provider === 'git' && action === 'push') {
+      if (!target || !fs.existsSync(target)) throw new Error('本地项目目录不存在，请先选择有效的项目文件夹。')
+      const isRepo = await capture('git', ['-C', target, 'rev-parse', '--is-inside-work-tree'], target).then(() => true).catch(() => false)
+      if (!isRepo) {
+        if (autoInit === false) throw new Error('当前目录尚未初始化为 Git 仓库。')
+        await runStep(jobId, '初始化本地 Git 仓库 (git init)', 'git', ['-C', target, 'init'], target, 4, 14, taskOptions)
+      }
+
+      const targetBranch = typeof pushBranchInput === 'string' && pushBranchInput.trim() ? pushBranchInput.trim() : 'main'
+      const curBranchRes = await capture('git', ['-C', target, 'branch', '--show-current'], target).catch(() => ({ stdout: '' }))
+      const curSymRes = !curBranchRes.stdout.trim()
+        ? await capture('git', ['-C', target, 'symbolic-ref', '--short', 'HEAD'], target).catch(() => ({ stdout: '' }))
+        : { stdout: '' }
+      const currentBranch = curBranchRes.stdout.trim() || curSymRes.stdout.trim()
+
+      if (targetBranch && targetBranch !== currentBranch) {
+        try {
+          await runStep(jobId, `切换/创建分支 ${targetBranch}`, 'git', ['-C', target, 'checkout', '-B', targetBranch], target, 15, 24, taskOptions)
+        } catch {
+          await runStep(jobId, `设置主分支名 ${targetBranch}`, 'git', ['-C', target, 'branch', '-M', targetBranch], target, 15, 24, taskOptions)
+        }
+      }
+
+      const remoteUrl = typeof url === 'string' ? url.trim() : ''
+      const existingRemote = (await capture('git', ['-C', target, 'config', '--get', 'remote.origin.url'], target).catch(() => ({ stdout: '' }))).stdout.trim()
+      if (remoteUrl) {
+        if (!existingRemote) {
+          await runStep(jobId, `关联远程仓库 origin -> ${remoteUrl}`, 'git', ['-C', target, 'remote', 'add', 'origin', remoteUrl], target, 25, 34, taskOptions)
+        } else if (existingRemote !== remoteUrl) {
+          await runStep(jobId, `更新远程仓库地址 origin -> ${remoteUrl}`, 'git', ['-C', target, 'remote', 'set-url', 'origin', remoteUrl], target, 25, 34, taskOptions)
+        }
+      } else if (!existingRemote) {
+        throw new Error('当前仓库未配置远程 origin 地址，请先填写远程仓库地址。')
+      }
+
+      if (commitChanges !== false) {
+        if (Array.isArray(selectedFiles)) {
+          if (selectedFiles.length > 0) {
+            await capture('git', ['-C', target, 'reset'], target).catch(() => {})
+            const chunkSize = 40
+            for (let i = 0; i < selectedFiles.length; i += chunkSize) {
+              const chunk = selectedFiles.slice(i, i + chunkSize)
+              await runStep(jobId, `暂存已选改动文件 (${Math.min(i + chunk.length, selectedFiles.length)}/${selectedFiles.length})`, 'git', ['-C', target, 'add', '-A', '--', ...chunk], target, 36, 52, taskOptions)
+            }
+          }
+        } else {
+          await runStep(jobId, '暂存工作区全部改动 (git add -A)', 'git', ['-C', target, 'add', '-A'], target, 36, 52, taskOptions)
+        }
+
+        const stagedDiff = await capture('git', ['-C', target, 'diff', '--cached', '--name-only'], target).catch(() => ({ stdout: '' }))
+        if (stagedDiff.stdout.trim()) {
+          const userName = (await capture('git', ['-C', target, 'config', 'user.name'], target).catch(() => ({ stdout: '' }))).stdout.trim()
+          const userEmail = (await capture('git', ['-C', target, 'config', 'user.email'], target).catch(() => ({ stdout: '' }))).stdout.trim()
+          const commitArgs = ['-C', target]
+          if (!userName) {
+            const fallbackName = resolveGitCredentials().username || os.userInfo().username || 'CodeSync Studio'
+            commitArgs.push('-c', `user.name=${fallbackName}`)
+          }
+          if (!userEmail) {
+            const cleanUser = (resolveGitCredentials().username || os.userInfo().username || 'codesync').replace(/[^a-zA-Z0-9._-]/g, '') || 'codesync'
+            commitArgs.push('-c', `user.email=${cleanUser}@users.noreply.github.com`)
+          }
+          const finalMsg = typeof commitMessage === 'string' && commitMessage.trim() ? commitMessage.trim() : 'chore: sync code via CodeSync Studio'
+          commitArgs.push('commit', '-m', finalMsg)
+          await runStep(jobId, `提交代码: ${finalMsg}`, 'git', commitArgs, target, 54, 68, taskOptions)
+        } else {
+          emitLine(jobId, '工作区无新增暂存文件，准备直接推送本地已有提交...', 'stdout')
+        }
+      }
+
+      const hasHead = await capture('git', ['-C', target, 'rev-parse', '--verify', 'HEAD'], target).then(() => true).catch(() => false)
+      if (!hasHead) {
+        throw new Error('当前本地仓库尚无任何提交记录，请勾选需要推送的文件并填写提交说明。')
+      }
+
+      if (pullBeforePush && !pushForce) {
+        try {
+          await runStep(jobId, `推送前同步远程分支 ${targetBranch} (pull --rebase)`, 'git', ['-C', target, 'pull', '--rebase', '--autostash', 'origin', targetBranch], target, 69, 75, taskOptions)
+        } catch {
+          emitLine(jobId, '远程尚无同名分支或无需变基，继续执行推送...', 'stdout')
+        }
+      }
+
+      const pushArgs = ['-C', target, 'push', '--progress', '-u', 'origin', targetBranch]
+      if (pushForce) pushArgs.splice(4, 0, '--force-with-lease')
+      await runStep(jobId, `推送分支 ${targetBranch} 到远程仓库`, 'git', pushArgs, target, 70, pushTags ? 88 : 96, taskOptions)
+      if (pushTags) {
+        await runStep(jobId, '同步推送全部标签 (--tags)', 'git', ['-C', target, 'push', '--progress', 'origin', '--tags'], target, 89, 96, taskOptions)
+      }
+    } else if (provider === 'svn' && action === 'push') {
+      if (!target || !fs.existsSync(target)) throw new Error('本地 SVN 工作副本目录不存在。')
+      const statusRes = await capture('svn', ['status', '--xml', target], target).catch(() => ({ stdout: '' }))
+      const entryMatches = statusRes.stdout.match(/<entry\s+path="[^"]+"[\s\S]*?<\/entry>/gi) || []
+      const selectedSet = Array.isArray(selectedFiles) && selectedFiles.length > 0 ? new Set(selectedFiles) : null
+      const toAdd = []
+      const toDelete = []
+      for (const block of entryMatches) {
+        const entryPath = xmlAttr(block, 'path')
+        const wcMatch = block.match(/<wc-status[^>]*>/i)?.[0] || ''
+        const item = xmlAttr(wcMatch, 'item').toLowerCase()
+        const rel = path.relative(target, entryPath).replace(/\\/g, '/')
+        if (selectedSet && !selectedSet.has(rel)) continue
+        if (item === 'unversioned') toAdd.push(entryPath)
+        else if (item === 'missing') toDelete.push(entryPath)
+      }
+      if (toAdd.length > 0) {
+        await runStep(jobId, `纳入版本控制 (${toAdd.length} 项新增文件)`, 'svn', ['add', '--force', ...toAdd], target, 10, 35, taskOptions)
+      }
+      if (toDelete.length > 0) {
+        await runStep(jobId, `标记删除 (${toDelete.length} 项缺失文件)`, 'svn', ['delete', '--force', ...toDelete], target, 36, 48, taskOptions)
+      }
+      const finalMsg = typeof commitMessage === 'string' && commitMessage.trim() ? commitMessage.trim() : 'chore: commit code via CodeSync Studio'
+      const commitArgs = ['commit', '-m', finalMsg]
+      if (Array.isArray(selectedFiles) && selectedFiles.length > 0) {
+        commitArgs.push(...selectedFiles.map((f) => path.join(target, f)))
+      } else {
+        commitArgs.push(target)
+      }
+      await runStep(jobId, `提交 SVN 改动: ${finalMsg}`, 'svn', commitArgs, target, 50, 96, taskOptions)
+    } else if (provider === 'git' && action === 'pull') {
       if (sparsePath) {
         const branchName = typeof version?.name === 'string' ? version.name.trim() : ''
         const label = `克隆 Git ${branchName && branchName !== 'HEAD' ? branchName : '默认版本'}（仅 ${sparsePath}）`
@@ -689,10 +1072,12 @@ async function runTask(payload) {
         await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 78, 96, taskOptions)
       } else {
         const args = ['clone', '--progress']
+        if (shallowClone) args.push('--depth', '1')
+        if (recurseSubmodules) args.push('--recurse-submodules')
         const branchName = typeof version?.name === 'string' ? version.name.trim() : ''
         if (branchName && branchName !== 'HEAD') args.push('--branch', branchName)
         args.push(url, target)
-        await runStep(jobId, `克隆 Git ${branchName && branchName !== 'HEAD' ? branchName : '默认版本'}`, 'git', args, undefined, 4, 92, taskOptions)
+        await runStep(jobId, `克隆 Git ${branchName && branchName !== 'HEAD' ? branchName : '默认版本'}${shallowClone ? ' (浅克隆)' : ''}`, 'git', args, undefined, 4, 92, taskOptions)
       }
     } else if (provider === 'git') {
       if (version?.kind === 'tag') {
@@ -756,12 +1141,19 @@ function toolStatus(command) {
 }
 
 app.whenReady().then(() => {
+  nativeTheme.themeSource = 'dark'
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 940,
     minWidth: 1080,
     minHeight: 720,
-    backgroundColor: '#070a13',
+    backgroundColor: '#060b16',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#060b16',
+      symbolColor: '#cbd5e1',
+      height: 32
+    },
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: false }
   })
   Menu.setApplicationMenu(null)
@@ -774,8 +1166,12 @@ ipcMain.handle('path:choose', async () => {
   return result.canceled ? '' : result.filePaths[0]
 })
 ipcMain.handle('path:choose-file', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], title: '选择 SSH 私钥文件' })
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], title: '选择文件' })
   return result.canceled ? '' : result.filePaths[0]
+})
+ipcMain.handle('path:read-text', async (_, target) => {
+  if (!target || typeof target !== 'string' || !fs.existsSync(target)) return ''
+  return fs.readFileSync(target, 'utf8')
 })
 ipcMain.handle('path:open', async (_, target) => {
   if (!target || typeof target !== 'string') return false
@@ -809,6 +1205,9 @@ ipcMain.handle('repository:probe', (_, payload) => probeRepository(payload))
 ipcMain.handle('repository:browse', (_, payload) => browseRepository(payload))
 ipcMain.handle('credentials:test', (_, payload) => testRepositoryCredentials(payload))
 ipcMain.handle('repository:inspect', (_, payload) => inspectLocal(payload))
+ipcMain.handle('repository:inspect-push', (_, payload) => inspectPushWorkspace(payload))
+ipcMain.handle('repository:scan-local', (_, payload) => scanLocalRepos(payload))
+ipcMain.handle('repository:diff', (_, payload) => getWorkspaceDiff(payload))
 ipcMain.handle('task:run', (_, payload) => runTask(payload))
 ipcMain.handle('task:cancel', () => {
   if (!activeJob?.child) return false

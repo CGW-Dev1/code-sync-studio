@@ -119,11 +119,21 @@ function parseSingleLine(rawLine, provider) {
 
   let url = ''
   let branch = ''
+  let subdir = ''
 
   const spaceParts = line.split(/\s+/)
-  if (spaceParts.length >= 2) {
+  if (spaceParts.length >= 3) {
     url = spaceParts[0].trim()
-    branch = spaceParts.slice(1).join(' ').trim()
+    branch = spaceParts[1].trim()
+    subdir = spaceParts.slice(2).join(' ').trim().replace(/^--path=/i, '').replace(/^\/+|\/+$/g, '')
+  } else if (spaceParts.length === 2) {
+    url = spaceParts[0].trim()
+    const second = spaceParts[1].trim()
+    if (second.startsWith('--path=') || second.startsWith('/')) {
+      subdir = second.replace(/^--path=/i, '').replace(/^\/+|\/+$/g, '')
+    } else {
+      branch = second
+    }
   } else {
     const hashIndex = line.indexOf('#')
     if (hashIndex > 0) {
@@ -152,7 +162,7 @@ function parseSingleLine(rawLine, provider) {
     }
   }
 
-  return { url, branch }
+  return { url, branch, subdir }
 }
 
 function parseUrlList(text, provider, targetRoot) {
@@ -175,6 +185,7 @@ function parseUrlList(text, provider, targetRoot) {
       id: `item-${index}-${parsed.url}`,
       url: parsed.url,
       parsedBranch: parsed.branch,
+      parsedSubdir: parsed.subdir || '',
       name: finalName,
       target
     })
@@ -240,7 +251,8 @@ function getRepoVersionOptions(repoData, provider) {
   return list
 }
 
-function resolveItemVersionPayload(item, branchSelection, batchProvider, globalBranch, batchSvnMainlineOnly, repoData) {
+function resolveItemVersionPayload(item, branchSelection, batchProvider, globalBranch, batchSvnMainlineOnly, repoData, selectedSubdir = '') {
+  const cleanSubdir = String(selectedSubdir || '').trim().replace(/^\/+|\/+$/g, '')
   let val = (branchSelection !== undefined ? branchSelection : item.parsedBranch)?.trim()
   if (!val && batchProvider === 'git') {
     val = globalBranch.trim()
@@ -249,24 +261,31 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
   let finalUrl = item.url
   if (batchProvider === 'git') {
     let branchName = ''
+    let kind = 'branch'
     if (val && val !== 'default' && val !== 'HEAD') {
-      if (val.startsWith('branch:') || val.startsWith('tag:')) {
-        branchName = val.split(':')[1] || ''
+      if (val.startsWith('tag:')) {
+        kind = 'tag'
+        branchName = val.slice(4) || ''
+      } else if (val.startsWith('branch:')) {
+        branchName = val.slice(7) || ''
       } else {
         branchName = val
       }
     }
+    const baseLabel = branchName || '默认分支'
     return {
       finalUrl,
+      sparsePath: cleanSubdir,
       payloadVersion: {
-        kind: 'branch',
+        kind,
         name: branchName,
-        label: branchName || '默认分支'
+        label: cleanSubdir ? `${baseLabel} · 仅 ${cleanSubdir}` : baseLabel
       }
     }
   }
 
   // SVN
+  let result
   if (!val || val === 'default' || val === 'HEAD' || val.toLowerCase() === 'trunk') {
     if (batchSvnMainlineOnly) {
       if (isTrunkUrl(item.url)) {
@@ -276,7 +295,7 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
         finalUrl = joinSvnUrl(item.url, trunkDir)
       }
     }
-    return {
+    result = {
       finalUrl,
       payloadVersion: {
         kind: 'svn',
@@ -285,12 +304,10 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
         label: batchSvnMainlineOnly ? '主线 trunk' : '最新版本'
       }
     }
-  }
-
-  if (val.startsWith('dir:')) {
+  } else if (val.startsWith('dir:')) {
     const subDir = val.slice(4).trim()
     finalUrl = joinSvnUrl(item.url, subDir)
-    return {
+    result = {
       finalUrl,
       payloadVersion: {
         kind: 'svn',
@@ -299,11 +316,9 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
         label: `目录/标签 · ${subDir}`
       }
     }
-  }
-
-  if (val.startsWith('rev:')) {
+  } else if (val.startsWith('rev:')) {
     const revNum = val.slice(4).trim()
-    return {
+    result = {
       finalUrl,
       payloadVersion: {
         kind: 'svn',
@@ -312,12 +327,9 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
         label: `r${revNum}`
       }
     }
-  }
-
-  const isRevision = /^(?:r)?\d+$/i.test(val)
-  if (isRevision) {
+  } else if (/^(?:r)?\d+$/i.test(val)) {
     const revNum = val.replace(/^r/i, '')
-    return {
+    result = {
       finalUrl,
       payloadVersion: {
         kind: 'svn',
@@ -326,21 +338,41 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
         label: `r${revNum}`
       }
     }
+  } else {
+    if (isTrunkUrl(item.url)) {
+      finalUrl = `${item.url.replace(/\/trunk\/?$/i, '')}/${val.replace(/^\/+/, '')}`
+    } else {
+      finalUrl = joinSvnUrl(item.url, val)
+    }
+    result = {
+      finalUrl,
+      payloadVersion: {
+        kind: 'svn',
+        revision: 'HEAD',
+        sourceUrl: finalUrl,
+        label: val
+      }
+    }
   }
 
-  if (isTrunkUrl(item.url)) {
-    finalUrl = `${item.url.replace(/\/trunk\/?$/i, '')}/${val.replace(/^\/+/, '')}`
-  } else {
-    finalUrl = joinSvnUrl(item.url, val)
-  }
-  return {
-    finalUrl,
-    payloadVersion: {
-      kind: 'svn',
-      revision: 'HEAD',
-      sourceUrl: finalUrl,
-      label: val
+  if (cleanSubdir) {
+    const subUrl = joinSvnUrl(result.finalUrl, cleanSubdir)
+    return {
+      finalUrl: subUrl,
+      sparsePath: cleanSubdir,
+      payloadVersion: {
+        ...result.payloadVersion,
+        kind: 'path',
+        name: cleanSubdir,
+        sourceUrl: subUrl,
+        label: `${result.payloadVersion.label} · 仅 ${cleanSubdir}`
+      }
     }
+  }
+
+  return {
+    ...result,
+    sparsePath: ''
   }
 }
 
@@ -450,9 +482,79 @@ function App() {
   const batchRunningRef = useRef(false)
   const cancelBatchRef = useRef(false)
   const [itemBranchOverrides, setItemBranchOverrides] = useState({})
+  const [itemSubdirOverrides, setItemSubdirOverrides] = useState({})
+  const [batchShowAdvanced, setBatchShowAdvanced] = useState(false)
+  const [batchBrowseItemId, setBatchBrowseItemId] = useState('')
+  const [batchBrowseEntries, setBatchBrowseEntries] = useState([])
+  const [batchBrowsePath, setBatchBrowsePath] = useState('')
+  const [batchBrowseLoading, setBatchBrowseLoading] = useState(false)
+  const [batchBrowseError, setBatchBrowseError] = useState('')
+  const batchBrowseSeq = useRef(0)
+
+  // 代码推送专属状态
+  const [pushProvider, setPushProvider] = useState('git')
+  const [pushTarget, setPushTarget] = useState(() => localStorage.getItem('code-sync-push-target') || '')
+  const [pushRemoteUrl, setPushRemoteUrl] = useState(() => localStorage.getItem('code-sync-push-remote') || '')
+  const [pushBranch, setPushBranch] = useState('main')
+  const [pushCommitMsg, setPushCommitMsg] = useState('')
+  const [pushCommitChanges, setPushCommitChanges] = useState(true)
+  const [pushPullBeforePush, setPushPullBeforePush] = useState(true)
+  const [pushForce, setPushForce] = useState(false)
+  const [pushTags, setPushTags] = useState(false)
+  const [pushWorkspace, setPushWorkspace] = useState(null)
+  const [pushInspecting, setPushInspecting] = useState(false)
+  const [pushInspectError, setPushInspectError] = useState('')
+  const [pushSelectedFiles, setPushSelectedFiles] = useState([])
+  const [pushFilter, setPushFilter] = useState('')
+  const [pushViewMode, setPushViewMode] = useState('split') // 'changes' | 'telemetry' | 'split'
+  const [pushRunning, setPushRunning] = useState(false)
+  const [pushElapsed, setPushElapsed] = useState(0)
+  const [pushProgress, setPushProgress] = useState({
+    value: 0,
+    label: '等待推送任务启动',
+    logs: [],
+    status: 'idle'
+  })
+  const pushRunningRef = useRef(false)
+
+  // 单仓克隆附加选项
+  const [shallowClone, setShallowClone] = useState(false)
+  const [recurseSubmodules, setRecurseSubmodules] = useState(false)
+
+  // 本地仓库工作区盘点状态 (mode === 'workspace')
+  const [workspaceRoot, setWorkspaceRoot] = useState(() => localStorage.getItem('code-sync-workspace-root') || localStorage.getItem('code-sync-batch-target-root') || '')
+  const [workspaceRepos, setWorkspaceRepos] = useState([])
+  const [workspaceScanning, setWorkspaceScanning] = useState(false)
+  const [workspaceFilter, setWorkspaceFilter] = useState('')
+  const [workspaceTypeFilter, setWorkspaceTypeFilter] = useState('all') // 'all' | 'dirty' | 'ahead' | 'git' | 'svn'
+  const [workspaceUpdatingMap, setWorkspaceUpdatingMap] = useState({})
+  const [workspaceBatchUpdating, setWorkspaceBatchUpdating] = useState(false)
+  const workspaceRunningRef = useRef(false)
+
+  const handleSetWorkspaceRoot = (val) => {
+    setWorkspaceRoot(val)
+    localStorage.setItem('code-sync-workspace-root', val)
+  }
+
+  const handleSetPushTarget = (val) => {
+    setPushTarget(val)
+    localStorage.setItem('code-sync-push-target', val)
+  }
+
+  const handleSetPushRemoteUrl = (val) => {
+    setPushRemoteUrl(val)
+    localStorage.setItem('code-sync-push-remote', val)
+  }
 
   const handleItemBranchChange = (itemId, val) => {
     setItemBranchOverrides((prev) => ({
+      ...prev,
+      [itemId]: val
+    }))
+  }
+
+  const handleItemSubdirChange = (itemId, val) => {
+    setItemSubdirOverrides((prev) => ({
       ...prev,
       [itemId]: val
     }))
@@ -469,6 +571,18 @@ function App() {
       return next
     })
     showToast(`已将分支 "${branch}" 应用到全部项目`)
+  }
+
+  const handleApplySubdirToAll = (subdirVal) => {
+    const clean = String(subdirVal || '').trim().replace(/^\/+|\/+$/g, '')
+    setItemSubdirOverrides(() => {
+      const next = {}
+      batchItems.forEach((item) => {
+        next[item.id] = clean
+      })
+      return next
+    })
+    showToast(clean ? `已将子目录 "${clean}" 应用到全部 ${batchItems.length} 个项目` : '已清除全部项目的子目录检出限制')
   }
 
   // 存储基础表单状态
@@ -525,6 +639,66 @@ function App() {
     }
     return () => { if (timer) clearInterval(timer) }
   }, [batchRunning])
+
+  // 代码推送任务计时器
+  useEffect(() => {
+    let timer = null
+    if (pushRunning) {
+      setPushElapsed(0)
+      timer = setInterval(() => setPushElapsed((sec) => sec + 1), 1000)
+    }
+    return () => { if (timer) clearInterval(timer) }
+  }, [pushRunning])
+
+  // 代码推送工作区自动检测
+  async function inspectPushWorkspaceNow(targetDir = pushTarget, silent = false) {
+    if (!api?.inspectPushWorkspace || !targetDir || !targetDir.trim()) {
+      setPushWorkspace(null)
+      setPushInspectError('')
+      setPushSelectedFiles([])
+      return
+    }
+    setPushInspecting(true)
+    setPushInspectError('')
+    try {
+      const info = await api.inspectPushWorkspace({ target: targetDir.trim() })
+      setPushWorkspace(info)
+      if (info.provider && info.provider !== pushProvider) {
+        setPushProvider(info.provider)
+      }
+      if (info.url) {
+        handleSetPushRemoteUrl(info.url)
+      }
+      if (info.branch) {
+        setPushBranch(info.branch)
+      }
+      setPushSelectedFiles((info.changes || []).map((c) => c.path))
+      if (!silent) {
+        showToast(info.initialized
+          ? `已加载 ${info.provider.toUpperCase()} 工作区 (${info.changes?.length || 0} 项文件变更)`
+          : `未初始化目录，已扫描 ${info.changes?.length || 0} 个待推送文件`)
+      }
+    } catch (err) {
+      setPushWorkspace(null)
+      setPushInspectError(appError(err))
+      setPushSelectedFiles([])
+    } finally {
+      setPushInspecting(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!api?.inspectPushWorkspace || !pushTarget.trim()) {
+      setPushWorkspace(null)
+      setPushInspectError('')
+      setPushSelectedFiles([])
+      return
+    }
+    const timer = setTimeout(() => {
+      inspectPushWorkspaceNow(pushTarget, true)
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [pushTarget])
 
   // 本地工作副本智能检测（更新代码模式）
   useEffect(() => {
@@ -627,7 +801,76 @@ function App() {
     setBatchProbingMap({})
     setBatchProbeErrorMap({})
     setItemBranchOverrides({})
+    setItemSubdirOverrides({})
+    setBatchBrowseItemId('')
+    setBatchBrowseEntries([])
+    setBatchBrowsePath('')
+    setBatchBrowseError('')
   }, [batchProvider])
+
+  const activeBatchBrowseItem = useMemo(() => {
+    if (!batchItems.length) return null
+    return batchItems.find((item) => item.id === batchBrowseItemId) || batchItems[0]
+  }, [batchItems, batchBrowseItemId])
+
+  const activeBatchSelectedSubdir = useMemo(() => {
+    if (!activeBatchBrowseItem) return ''
+    return itemSubdirOverrides[activeBatchBrowseItem.id] !== undefined
+      ? itemSubdirOverrides[activeBatchBrowseItem.id]
+      : (activeBatchBrowseItem.parsedSubdir || '')
+  }, [activeBatchBrowseItem, itemSubdirOverrides])
+
+  async function navigateBatchBrowse(path = '', targetItemOverride = null) {
+    const item = targetItemOverride || activeBatchBrowseItem
+    if (!api || !item || !item.url) return
+    const seq = ++batchBrowseSeq.current
+    setBatchBrowseLoading(true)
+    setBatchBrowseError('')
+    const branchVal = itemBranchOverrides[item.id] !== undefined ? itemBranchOverrides[item.id] : item.parsedBranch
+    const branchName = branchVal && branchVal !== 'default' ? branchVal.replace(/^(branch|tag):/, '') : 'HEAD'
+    try {
+      const result = await api.browseRepository({
+        provider: batchProvider,
+        url: item.url,
+        path,
+        ...(batchProvider === 'svn' ? { revision: 'HEAD' } : { version: { name: branchName, kind: 'branch' } })
+      })
+      if (seq === batchBrowseSeq.current) {
+        setBatchBrowsePath(path)
+        setBatchBrowseEntries(result.entries || [])
+      }
+    } catch (err) {
+      if (seq === batchBrowseSeq.current) {
+        setBatchBrowseError(appError(err))
+      }
+    } finally {
+      if (seq === batchBrowseSeq.current) {
+        setBatchBrowseLoading(false)
+      }
+    }
+  }
+
+  function selectBatchBrowsePath(path) {
+    if (!activeBatchBrowseItem) return
+    handleItemSubdirChange(activeBatchBrowseItem.id, path)
+    if (batchProvider === 'svn' && path && batchSvnMainlineOnly) {
+      handleSetBatchSvnMainlineOnly(false)
+    }
+  }
+
+  function handleOpenBatchItemSubdir(item) {
+    if (!item) return
+    setBatchShowAdvanced(true)
+    setBatchBrowseItemId(item.id)
+    setBatchBrowsePath('')
+    navigateBatchBrowse('', item)
+  }
+
+  useEffect(() => {
+    if (batchShowAdvanced && activeBatchBrowseItem && !batchBrowseEntries.length && !batchBrowseLoading && !batchBrowseError) {
+      navigateBatchBrowse('', activeBatchBrowseItem)
+    }
+  }, [batchShowAdvanced, activeBatchBrowseItem?.id])
 
   const protocolWarning = useMemo(() => {
     if (!activeBatchUrls.trim()) return null
@@ -650,11 +893,42 @@ function App() {
     if (!api) return
     api.getToolStatus().then(setToolStatus).catch(() => {})
     return api.onTaskEvent((event) => {
+      if (workspaceRunningRef.current) {
+        return
+      }
+
       if (batchRunningRef.current) {
         if (event.type === 'line') {
           setBatchProgress((current) => ({
             ...current,
             logs: [...current.logs.slice(-399), { ...event }]
+          }))
+        }
+        return
+      }
+
+      if (pushRunningRef.current) {
+        if (event.type === 'start') {
+          setPushRunning(true)
+          setPushProgress({ value: 2, label: event.label, logs: [], status: 'running', provider: event.provider, action: event.action })
+        }
+        if (event.type === 'step') {
+          setPushProgress((current) => ({ ...current, value: Math.max(current.value, event.value), label: event.label }))
+        }
+        if (event.type === 'line') {
+          setPushProgress((current) => ({ ...current, logs: [...current.logs.slice(-399), { ...event }] }))
+        }
+        if (event.type === 'progress') {
+          setPushProgress((current) => ({ ...current, value: Math.max(current.value, event.value), label: event.label }))
+        }
+        if (event.type === 'done') {
+          setPushRunning(false)
+          pushRunningRef.current = false
+          setPushProgress((current) => ({
+            ...current,
+            value: event.ok ? 100 : current.value,
+            label: event.label,
+            status: event.ok ? 'success' : 'error'
           }))
         }
         return
@@ -812,13 +1086,14 @@ function App() {
     }
   }
 
-  async function probe() {
-    if (!url.trim()) return setProbeError('请输入仓库地址后再查看版本。')
+  async function probe(overrideUrl) {
+    const targetUrl = (typeof overrideUrl === 'string' ? overrideUrl : url).trim()
+    if (!targetUrl) return setProbeError('请输入仓库地址后再查看版本。')
     if (!api) return setProbeError('仓库探测需要在桌面版中运行。')
     setProbing(true)
     setProbeError('')
     try {
-      const result = await api.probeRepository({ provider, url })
+      const result = await api.probeRepository({ provider, url: targetUrl })
       setRepo(result)
       setSvnScope(result)
       setSvnScopeError('')
@@ -830,6 +1105,23 @@ function App() {
       setProbeError(appError(error))
     } finally {
       setProbing(false)
+    }
+  }
+
+  async function pasteUrlFromClipboard() {
+    try {
+      const text = await navigator.clipboard.readText()
+      const clean = (text || '').trim().split(/\r?\n/)[0]?.trim() || ''
+      if (!clean) return showToast('剪贴板为空')
+      handleSetUrl(clean)
+      if (/^svn(?:\+[a-z]+)?:\/\//i.test(clean) || /\/trunk\/?$/i.test(clean)) {
+        setProvider('svn')
+      } else if (/^git@/i.test(clean) || /\.git$/i.test(clean)) {
+        setProvider('git')
+      }
+      showToast('已粘贴仓库地址')
+    } catch {
+      showToast('无法读取剪贴板，请直接 Ctrl+V 粘贴')
     }
   }
 
@@ -867,7 +1159,16 @@ function App() {
     setRunning(true)
     setProgress({ ...blankProgress, status: 'running', label: action === 'pull' ? '正在启动拉取任务...' : '正在启动更新任务...' })
     try {
-      await api.runTask({ provider, action, url: provider === 'svn' ? (payloadVersion.sourceUrl || url) : url, target, version: payloadVersion, path: selectedPath })
+      await api.runTask({
+        provider,
+        action,
+        url: provider === 'svn' ? (payloadVersion.sourceUrl || url) : url,
+        target,
+        version: payloadVersion,
+        path: selectedPath,
+        shallowClone: provider === 'git' && action === 'pull' ? shallowClone : false,
+        recurseSubmodules: provider === 'git' && action === 'pull' ? recurseSubmodules : false
+      })
       const entry = {
         id: Date.now(),
         provider,
@@ -1020,14 +1321,19 @@ function App() {
         ? itemBranchOverrides[item.id]
         : item.parsedBranch
 
+      const selectedSubdir = itemSubdirOverrides[item.id] !== undefined
+        ? itemSubdirOverrides[item.id]
+        : (item.parsedSubdir || '')
+
       const repoData = batchRepoDataMap[item.url]
-      const { finalUrl, payloadVersion } = resolveItemVersionPayload(
+      const { finalUrl, sparsePath, payloadVersion } = resolveItemVersionPayload(
         item,
         branchSelection,
         batchProvider,
         batchGitBranch,
         batchSvnMainlineOnly,
-        repoData
+        repoData,
+        selectedSubdir
       )
 
       setBatchItemStatuses((prev) => ({ ...prev, [item.id]: { status: 'running', error: '' } }))
@@ -1057,7 +1363,7 @@ function App() {
           url: finalUrl,
           target: item.target,
           version: payloadVersion,
-          path: ''
+          path: sparsePath || ''
         })
 
         if (cancelBatchRef.current) break
@@ -1167,14 +1473,19 @@ function App() {
       ? itemBranchOverrides[targetItem.id]
       : targetItem.parsedBranch
 
+    const selectedSubdir = itemSubdirOverrides[targetItem.id] !== undefined
+      ? itemSubdirOverrides[targetItem.id]
+      : (targetItem.parsedSubdir || '')
+
     const repoData = batchRepoDataMap[targetItem.url]
-    const { finalUrl, payloadVersion } = resolveItemVersionPayload(
+    const { finalUrl, sparsePath, payloadVersion } = resolveItemVersionPayload(
       targetItem,
       branchSelection,
       batchProvider,
       batchGitBranch,
       batchSvnMainlineOnly,
-      repoData
+      repoData,
+      selectedSubdir
     )
 
     try {
@@ -1184,7 +1495,7 @@ function App() {
         url: finalUrl,
         target: targetItem.target,
         version: payloadVersion,
-        path: ''
+        path: sparsePath || ''
       })
       setBatchItemStatuses((prev) => ({ ...prev, [targetItem.id]: { status: 'success', error: '', action: taskAction } }))
       showToast(`${targetItem.name} ${taskAction === 'pull' ? '拉取' : '更新'}成功`)
@@ -1252,7 +1563,24 @@ function App() {
     if (!api?.chooseFile) return showToast('请在桌面端中使用文件选择')
     const file = await api.chooseFile()
     if (!file) return
-    showToast(`已选择文件：${file}`)
+    if (api.readTextFile) {
+      const content = await api.readTextFile(file)
+      if (!content || !content.trim()) return showToast('所选文件内容为空或无法读取')
+      const current = batchProvider === 'git' ? batchGitUrls : batchSvnUrls
+      const merged = current.trim() ? `${current.trim()}\n${content.trim()}` : content.trim()
+      if (batchProvider === 'git') handleSetBatchGitUrls(merged)
+      else handleSetBatchSvnUrls(merged)
+      showToast('已从文件导入仓库列表')
+    } else {
+      showToast(`已选择文件：${file}`)
+    }
+  }
+
+  function handleCopyBatchUrls() {
+    const current = (batchProvider === 'git' ? batchGitUrls : batchSvnUrls).trim()
+    if (!current) return showToast('当前列表为空')
+    navigator.clipboard.writeText(current)
+    showToast(`已复制 ${batchItems.length} 个仓库链接`)
   }
 
   async function cancelBatchSync() {
@@ -1273,7 +1601,250 @@ function App() {
     }
     setBatchItemStatuses({})
     setItemBranchOverrides({})
+    setItemSubdirOverrides({})
+    setBatchBrowseItemId('')
+    setBatchBrowseEntries([])
+    setBatchBrowsePath('')
     showToast('已清空当前链接列表')
+  }
+
+  async function browsePushTarget() {
+    if (!api) return showToast('请在桌面版中使用目录选择')
+    const selected = await api.choosePath()
+    if (selected) {
+      handleSetPushTarget(selected)
+    }
+  }
+
+  async function handleViewFileDiff(fileItem) {
+    if (!api?.getWorkspaceDiff || !pushTarget.trim() || !fileItem?.path) return
+    try {
+      const res = await api.getWorkspaceDiff({
+        provider: pushProvider,
+        target: pushTarget.trim(),
+        filePath: fileItem.path
+      })
+      const diffLines = String(res?.diff || '无差异内容').split(/\r?\n/).slice(0, 180)
+      const now = new Date().toISOString()
+      setPushProgress((prev) => ({
+        ...prev,
+        logs: [
+          ...prev.logs.slice(-220),
+          { time: now, text: `========== Diff 预览: ${fileItem.displayPath} (${fileItem.label}) ==========`, source: 'stdout' },
+          ...diffLines.map((line) => ({
+            time: now,
+            text: line,
+            source: line.startsWith('-') && !line.startsWith('---')
+              ? 'stderr'
+              : line.startsWith('+') && !line.startsWith('+++')
+              ? 'diff-add'
+              : line.startsWith('@@')
+              ? 'diff-hunk'
+              : 'stdout'
+          }))
+        ]
+      }))
+      if (pushViewMode === 'changes') {
+        setPushViewMode('split')
+      }
+    } catch (err) {
+      showToast(appError(err))
+    }
+  }
+
+  // 本地仓库工作区盘点方法
+  async function scanWorkspaceNow(dir = workspaceRoot, silent = false) {
+    const cleanDir = (dir || '').trim()
+    if (!cleanDir) {
+      if (!silent) showToast('请先选择要扫描的本地工作区根目录')
+      return
+    }
+    if (!api?.scanLocalRepos) return
+    setWorkspaceScanning(true)
+    try {
+      const res = await api.scanLocalRepos({ rootDir: cleanDir })
+      setWorkspaceRepos(res?.repos || [])
+      if (!silent) {
+        showToast(`扫描完成：共发现 ${(res?.repos || []).length} 个本地仓库`)
+      }
+    } catch (err) {
+      if (!silent) showToast(appError(err))
+    } finally {
+      setWorkspaceScanning(false)
+    }
+  }
+
+  useEffect(() => {
+    if (mode === 'workspace' && workspaceRoot.trim() && workspaceRepos.length === 0 && !workspaceScanning) {
+      scanWorkspaceNow(workspaceRoot, true)
+    }
+  }, [mode])
+
+  async function browseWorkspaceRoot() {
+    if (!api) return showToast('请在桌面版中使用目录选择')
+    const selected = await api.choosePath()
+    if (selected) {
+      handleSetWorkspaceRoot(selected)
+      scanWorkspaceNow(selected, false)
+    }
+  }
+
+  async function updateSingleWorkspaceRepo(repoItem) {
+    if (!api || !repoItem || workspaceUpdatingMap[repoItem.target]?.status === 'running') return
+    setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'running', message: '更新中' } }))
+    workspaceRunningRef.current = true
+    try {
+      await api.runTask({
+        provider: repoItem.provider,
+        action: 'update',
+        url: repoItem.url || '',
+        target: repoItem.target,
+        version: repoItem.provider === 'git'
+          ? { kind: 'branch', name: repoItem.branch === 'HEAD' ? '' : (repoItem.branch || ''), label: repoItem.branch || 'HEAD' }
+          : { kind: 'svn', revision: 'HEAD', sourceUrl: repoItem.url || '' }
+      })
+      setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'success', message: '已更新' } }))
+      showToast(`${repoItem.name} 已更新至最新`)
+      await scanWorkspaceNow(workspaceRoot, true)
+    } catch (err) {
+      setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'error', message: appError(err) } }))
+      showToast(`${repoItem.name} 更新失败: ${appError(err)}`)
+    } finally {
+      workspaceRunningRef.current = false
+    }
+  }
+
+  async function updateAllWorkspaceRepos(reposToUpdate = workspaceRepos) {
+    if (!api || !reposToUpdate.length || workspaceBatchUpdating) return
+    setWorkspaceBatchUpdating(true)
+    workspaceRunningRef.current = true
+    showToast(`开始批量更新 ${reposToUpdate.length} 个本地仓库...`)
+    let okCount = 0
+    let failCount = 0
+    for (const repoItem of reposToUpdate) {
+      setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'running', message: '更新中' } }))
+      try {
+        await api.runTask({
+          provider: repoItem.provider,
+          action: 'update',
+          url: repoItem.url || '',
+          target: repoItem.target,
+          version: repoItem.provider === 'git'
+            ? { kind: 'branch', name: repoItem.branch === 'HEAD' ? '' : (repoItem.branch || ''), label: repoItem.branch || 'HEAD' }
+            : { kind: 'svn', revision: 'HEAD', sourceUrl: repoItem.url || '' }
+        })
+        okCount++
+        setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'success', message: '已更新' } }))
+      } catch (err) {
+        failCount++
+        setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'error', message: appError(err) } }))
+      }
+    }
+    workspaceRunningRef.current = false
+    setWorkspaceBatchUpdating(false)
+    await scanWorkspaceNow(workspaceRoot, true)
+    showToast(`本地仓库全部更新完毕：成功 ${okCount} 个${failCount ? `，失败 ${failCount} 个` : ''}`)
+  }
+
+  function jumpToPushRepo(repoItem) {
+    if (!repoItem) return
+    setPushProvider(repoItem.provider || 'git')
+    handleSetPushTarget(repoItem.target)
+    if (repoItem.url) handleSetPushRemoteUrl(repoItem.url)
+    if (repoItem.branch && repoItem.provider === 'git') setPushBranch(repoItem.branch)
+    setMode('push')
+    showToast(`已载入到代码推送：${repoItem.name}`)
+  }
+
+  function jumpToSingleRepo(repoItem) {
+    if (!repoItem) return
+    setProvider(repoItem.provider || 'git')
+    setAction('update')
+    handleSetTarget(repoItem.target)
+    if (repoItem.url) handleSetUrl(repoItem.url)
+    setMode('single')
+    showToast(`已载入到单仓更新：${repoItem.name}`)
+  }
+
+  async function runPushTask() {
+    if (running || batchRunning || pushRunning) return
+    if (!pushTarget.trim()) return showToast('请先选择本地项目目录')
+    if (pushProvider === 'git' && !pushRemoteUrl.trim() && !pushWorkspace?.url) {
+      return showToast('请先填写远程 Git 仓库地址')
+    }
+    if (!api) return showToast('任务执行需要在桌面版中运行')
+
+    const allChanges = pushWorkspace?.changes || []
+    if (pushCommitChanges && allChanges.length > 0 && pushSelectedFiles.length === 0 && (pushWorkspace?.ahead || 0) === 0) {
+      return showToast('请至少勾选一个需要提交推送的改动文件')
+    }
+
+    setPushRunning(true)
+    pushRunningRef.current = true
+    if (pushViewMode === 'changes') setPushViewMode('split')
+    setPushProgress({
+      value: 2,
+      label: `正在启动 ${pushProvider.toUpperCase()} 代码推送任务...`,
+      logs: [],
+      status: 'running'
+    })
+
+    const finalRemoteUrl = pushRemoteUrl.trim() || pushWorkspace?.url || ''
+    const finalBranch = pushProvider === 'git' ? (pushBranch.trim() || 'main') : 'HEAD'
+    const finalCommitMsg = pushCommitMsg.trim() || 'chore: sync code via CodeSync Studio'
+
+    try {
+      await api.runTask({
+        provider: pushProvider,
+        action: 'push',
+        url: finalRemoteUrl,
+        target: pushTarget.trim(),
+        branch: finalBranch,
+        commitMessage: finalCommitMsg,
+        commitChanges: pushCommitChanges,
+        pullBeforePush: pushProvider === 'git' ? pushPullBeforePush : false,
+        selectedFiles: allChanges.length > 0 && pushSelectedFiles.length < allChanges.length
+          ? pushSelectedFiles
+          : allChanges.length > 0
+          ? pushSelectedFiles
+          : null,
+        pushForce,
+        pushTags,
+        autoInit: true
+      })
+
+      const entry = {
+        id: Date.now(),
+        provider: pushProvider,
+        action: 'push',
+        version: pushProvider === 'git' ? `推送 -> ${finalBranch}` : 'SVN Commit',
+        target: pushTarget.trim(),
+        url: finalRemoteUrl,
+        time: new Date().toISOString(),
+        ok: true
+      }
+      setRecent((currentRecent) => {
+        const next = [entry, ...currentRecent.filter((r) => !(r.target === entry.target && r.action === 'push'))].slice(0, 10)
+        localStorage.setItem('code-sync-recent', JSON.stringify(next))
+        return next
+      })
+
+      setPushCommitMsg('')
+      await inspectPushWorkspaceNow(pushTarget.trim(), true)
+      showToast('代码已成功推送到远程仓库')
+    } catch (error) {
+      showToast(appError(error))
+    } finally {
+      setPushRunning(false)
+      pushRunningRef.current = false
+    }
+  }
+
+  async function cancelPushTask() {
+    if (api) {
+      try { await api.cancelTask() } catch {}
+    }
+    showToast('正在停止推送任务...')
   }
 
   function showToast(message) {
@@ -1359,6 +1930,14 @@ function App() {
   }
 
   function loadRecent(entry) {
+    if (entry.action === 'push') {
+      setMode('push')
+      setPushProvider(entry.provider || 'git')
+      handleSetPushTarget(entry.target || '')
+      if (entry.url) handleSetPushRemoteUrl(entry.url)
+      showToast(`已载入推送工作区：${entry.target}`)
+      return
+    }
     setMode('single')
     setProvider(entry.provider)
     setAction(entry.action)
@@ -1379,38 +1958,61 @@ function App() {
 
   return (
     <div className="app-shell">
-      {/* 侧边智能战控导航轨 */}
+      <div className="window-titlebar">
+        <div className="window-titlebar-left">
+          <img src={logoUrl} alt="" />
+          <span>CodeSync Studio</span>
+        </div>
+      </div>
+      <div className="app-body">
       <aside className="sidebar">
         <div className="brand-row">
-          <div className="brand-mark" title="CodeSync Studio · 代码同步工作台">
+          <div className="brand-mark" title="CodeSync Studio">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
-          <span className="brand-badge">PRO v1.3</span>
+          <span className="brand-badge">v1.4.0</span>
         </div>
 
         <nav className="side-nav">
           <button
             className={`side-nav-item ${mode === 'single' ? 'active' : ''}`}
             onClick={() => setMode('single')}
-            title="单仓代码同步与版本更新"
+            title="单仓代码拉取与更新"
           >
-            <HardDriveDownload size={19} />
+            <HardDriveDownload size={18} />
             <span>单仓</span>
           </button>
           <button
             className={`side-nav-item ${mode === 'batch' ? 'active' : ''}`}
             onClick={() => setMode('batch')}
-            title="多仓批量拉取引擎"
+            title="多仓批量队列拉取"
           >
-            <Layers size={19} />
+            <Layers size={18} />
             <span>批量</span>
+          </button>
+          <button
+            className={`side-nav-item ${mode === 'push' ? 'active' : ''}`}
+            onClick={() => setMode('push')}
+            title="本地代码提交与推送"
+          >
+            <Upload size={18} />
+            <span>推送</span>
+          </button>
+          <button
+            className={`side-nav-item ${mode === 'workspace' ? 'active' : ''}`}
+            onClick={() => setMode('workspace')}
+            title="本地多仓工作区盘点与批量更新"
+          >
+            <FolderOpen size={18} />
+            <span>仓库</span>
+            {workspaceRepos.length > 0 && <b>{workspaceRepos.length}</b>}
           </button>
           <button
             className={`side-nav-item ${mode === 'history' ? 'active' : ''}`}
             onClick={() => setMode('history')}
-            title="历史任务与同步记录"
+            title="历史同步记录"
           >
-            <History size={19} />
+            <History size={18} />
             <span>记录</span>
             {recent.length > 0 && <b>{recent.length}</b>}
           </button>
@@ -1432,31 +2034,32 @@ function App() {
             className="side-nav-item"
             onClick={openCredentialSettings}
             disabled={credentialLoading}
-            title="凭据与网络连接设置"
+            title="凭据与连接设置"
           >
-            <Settings2 size={19} />
+            <Settings2 size={18} />
             <span>设置</span>
           </button>
-          <div className="profile" title="CodeSync Studio Console">CS</div>
         </div>
       </aside>
 
-      {/* 主工作台画卷 */}
       <main className="main-area">
-        {/* 顶部指挥栏 */}
         <header className="topbar">
           <div className="topbar-title">
             <div className="cockpit-id">
               <i />
-              SYS // WORKSPACE
+              CODESYNC
             </div>
-            <ChevronRight size={14} color="#64748b" />
+            <ChevronRight size={13} color="#64748b" />
             <strong>
               {mode === 'single'
-                ? '单仓代码同步与版本更新'
+                ? '单仓同步'
                 : mode === 'batch'
-                ? '多仓批量队列拉取引擎'
-                : '任务执行与同步记录'}
+                ? '批量拉取'
+                : mode === 'push'
+                ? '代码推送'
+                : mode === 'workspace'
+                ? '本地仓库管家'
+                : '同步记录'}
             </strong>
           </div>
           <div className="mode-segmented">
@@ -1466,7 +2069,7 @@ function App() {
               onClick={() => setMode('single')}
             >
               <HardDriveDownload size={13} />
-              <span>单仓模式</span>
+              <span>单仓同步</span>
             </button>
             <button
               type="button"
@@ -1474,7 +2077,23 @@ function App() {
               onClick={() => setMode('batch')}
             >
               <Layers size={13} />
-              <span>批量引擎</span>
+              <span>批量拉取</span>
+            </button>
+            <button
+              type="button"
+              className={`mode-tab-btn ${mode === 'push' ? 'active' : ''}`}
+              onClick={() => setMode('push')}
+            >
+              <Upload size={13} />
+              <span>代码推送</span>
+            </button>
+            <button
+              type="button"
+              className={`mode-tab-btn ${mode === 'workspace' ? 'active' : ''}`}
+              onClick={() => setMode('workspace')}
+            >
+              <FolderOpen size={13} />
+              <span>本地仓库</span>
             </button>
             <button
               type="button"
@@ -1486,159 +2105,193 @@ function App() {
             </button>
           </div>
           <div className="topbar-right">
-            <span className="runtime-badge"><span className="pulse" /> 本机进程执行</span>
-            <span className="dpapi-badge" title="凭据受 Windows DPAPI 加密保护"><LockKeyhole size={11} /> 安全存储</span>
-            <button className="icon-button" title="使用说明与帮助" onClick={() => showToast('Git 与 SVN 调用系统 PATH 本机引擎，安全轻量无需上传数据')}>
-              <CircleHelp size={16} />
+            <span className="runtime-badge"><span className="pulse" /> CLI 就绪</span>
+            <button className="dpapi-badge" type="button" onClick={openCredentialSettings} title="点击配置 Git / SVN 凭据 (Windows DPAPI 加密)">
+              <LockKeyhole size={11} /> 凭据配置
             </button>
           </div>
         </header>
 
         <div className="page-content">
-          <section className="page-intro">
-            <div className="intro-title-group">
-              <span className="intro-kicker">
-                <GitCommitHorizontal size={13} />
-                {mode === 'single'
-                  ? 'SYS.SINGLE // 单仓工作台'
-                  : mode === 'batch'
-                  ? 'SYS.BATCH // 多仓调度引擎'
-                  : 'SYS.HISTORY // 任务执行记录'}
-              </span>
-              <span className="intro-heading">
-                {mode === 'single'
-                  ? '单仓代码拉取与版本更新'
-                  : mode === 'batch'
-                  ? '多仓批量队列调度'
-                  : '历史同步任务归档'}
-              </span>
-              <span className="intro-divider">/</span>
-              <span className="intro-subtext">
-                {mode === 'single'
-                  ? '支持一键克隆、切换分支/标签更新与按需子目录检出'
-                  : mode === 'batch'
-                  ? '多仓库并发队列调度，支持智能自动更新与独立分支选择'
-                  : '集中检索所有已执行任务，支持一键重载配置或定位本地目录'}
-              </span>
-            </div>
-            <div className="intro-meta-badge">
-              <span className="pulse" />
-              <strong>{mode === 'history' ? `${recent.length} 条记录` : 'CLI 引擎就绪'}</strong>
-              <small>
-                {mode === 'single'
-                  ? 'GIT / SVN 直连'
-                  : mode === 'batch'
-                  ? `已解析 ${batchItems.length} 个项目`
-                  : '本地持久化存储'}
-              </small>
-            </div>
-          </section>
-
           {mode === 'single' ? (
             <section className="sync-layout">
               <div className="sync-panel panel">
                 <div className="panel-heading">
-                  <div>
-                    <p className="section-kicker">// STEP 01 CONFIGURATION</p>
-                    <h2>配置同步任务</h2>
-                  </div>
-                  <span className="secure-label"><Check size={12} /> 本机直连</span>
+                  <h2>单仓配置</h2>
+                  <span className="secure-label"><Check size={12} /> {provider.toUpperCase()} 引擎</span>
                 </div>
                 <div className="sync-panel-content">
-                <div className="field-group">
-                  <label className="field-title">版本控制引擎</label>
-                  <div className="segmented-control">
-                    <button className={provider === 'git' ? 'selected git-selected' : ''} onClick={() => setProvider('git')}>
-                      <GitBranch size={16} /> Git 仓库
-                    </button>
-                    <button className={provider === 'svn' ? 'selected svn-selected' : ''} onClick={() => setProvider('svn')}>
-                      <Server size={16} /> SVN 仓库
-                    </button>
+                  <div className="batch-options-grid">
+                    <div className="field-group" style={{ marginTop: 0 }}>
+                      <label className="field-title">版本控制引擎</label>
+                      <div className="segmented-control">
+                        <button type="button" className={provider === 'git' ? 'selected git-selected' : ''} onClick={() => setProvider('git')}>
+                          <GitBranch size={15} /> Git
+                        </button>
+                        <button type="button" className={provider === 'svn' ? 'selected svn-selected' : ''} onClick={() => setProvider('svn')}>
+                          <Server size={15} /> SVN
+                        </button>
+                      </div>
+                    </div>
+                    <div className="field-group" style={{ marginTop: 0 }}>
+                      <label className="field-title">操作模式</label>
+                      <div className="segmented-control">
+                        <button type="button" className={action === 'pull' ? 'selected' : ''} onClick={() => setAction('pull')}>
+                          <ArrowDownToLine size={15} /> 克隆拉取
+                        </button>
+                        <button type="button" className={action === 'update' ? 'selected' : ''} onClick={() => setAction('update')}>
+                          <RefreshCw size={15} /> 更新代码
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="field-group">
-                  <label className="field-title">任务类型</label>
-                  <div className="action-switch">
-                    <button className={action === 'pull' ? 'selected' : ''} onClick={() => setAction('pull')}>
-                      <ArrowDownToLine size={16} />
-                      <span><b>拉取新代码 (Clone)</b><small>从远程克隆到全新本地目录</small></span>
-                    </button>
-                    <button className={action === 'update' ? 'selected' : ''} onClick={() => setAction('update')}>
-                      <RefreshCw size={16} />
-                      <span><b>更新代码 (Pull / Update)</b><small>更新已有本地工作副本代码</small></span>
-                    </button>
+
+                  <div className="field-group">
+                    <div className="label-row">
+                      <label className="field-title" htmlFor="repo-url">远程仓库地址</label>
+                      {action === 'update' && <span>可选填</span>}
+                    </div>
+                    <div className="input-with-icon">
+                      <Upload size={15} />
+                      <input
+                        id="repo-url"
+                        value={url}
+                        onChange={(event) => handleSetUrl(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === 'Enter') probe() }}
+                        placeholder={provider === 'git' ? 'https://github.com/org/repo.git 或 git@...' : 'https://svn.example.com/svn/project/trunk'}
+                      />
+                      <button type="button" onClick={pasteUrlFromClipboard} title="粘贴剪贴板地址">
+                        <Copy size={14} />
+                      </button>
+                      <button type="button" className={probing ? 'loading-button' : ''} onClick={() => probe()} title="读取远程分支与版本" disabled={probing || !url.trim()}>
+                        {probing ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}
+                      </button>
+                    </div>
+                    {probeError && <div className="field-error"><AlertCircle size={14} />{probeError}</div>}
                   </div>
-                </div>
-                <div className="field-group">
-                  <div className="label-row">
-                    <label className="field-title" htmlFor="repo-url">远程仓库地址</label>
-                    <span>{action === 'update' ? '更新已有目录可选填' : '支持 HTTPS / SSH / SVN'}</span>
-                  </div>
-                  <div className="input-with-icon">
-                    <Upload size={15} />
-                    <input
-                      id="repo-url"
-                      value={url}
-                      onChange={(event) => handleSetUrl(event.target.value)}
-                      onKeyDown={(event) => { if (event.key === 'Enter') probe() }}
-                      placeholder={provider === 'git' ? '例如：https://github.com/organization/repo.git' : '例如：https://svn.example.com/svn/project/trunk'}
-                    />
-                    <button className={probing ? 'loading-button' : ''} onClick={probe} title="查看远程分支与版本" disabled={probing || !url.trim()}>
-                      {probing ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}
-                    </button>
-                  </div>
-                  {probeError && <div className="field-error"><AlertCircle size={14} />{probeError}</div>}
-                </div>
-                <div className="repo-discovery">
-                  {repo ? <RepoSummary repo={repo} provider={provider} /> : (
-                    <div className="discovery-empty">
-                      <Search size={13} />
-                      <span>输入仓库地址后点击右侧放大镜可预检分支与版本，或留空直接拉取默认分支 (HEAD)</span>
+
+                  {repo && (
+                    <div className="repo-discovery">
+                      <RepoSummary repo={repo} provider={provider} />
                     </div>
                   )}
-                </div>
-                {versions.length > 0 && (
-                <div className="field-group">
-                  <div className="label-row">
-                    <label className="field-title" htmlFor="version-select">目标分支 / 修订版本</label>
-                    <span>{versions.length} 个可选版本</span>
+
+                  {versions.length > 0 && (
+                    <div className="field-group">
+                      <div className="label-row">
+                        <label className="field-title" htmlFor="version-select">目标分支 / 版本</label>
+                        <span>{versions.length} 个可选</span>
+                      </div>
+                      <div className="select-wrap">
+                        <GitCommitHorizontal size={15} />
+                        <select
+                          id="version-select"
+                          value={versionId}
+                          onChange={(event) => setVersionId(event.target.value)}
+                        >
+                          {versions.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label}{item.hash ? `  ·  ${shortHash(item.hash)}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={14} />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="field-group">
+                    <div className="label-row">
+                      <label className="field-title" htmlFor="target-path">本地目标目录</label>
+                      {target.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => openLocalPath(target)}
+                          style={{ fontSize: 11, color: 'var(--cyan-primary)', background: 'transparent', padding: 0, display: 'flex', alignItems: 'center', gap: 3 }}
+                        >
+                          <ExternalLink size={11} />打开目录
+                        </button>
+                      )}
+                    </div>
+                    <div className="input-with-icon">
+                      <FolderOpen size={15} />
+                      <input
+                        id="target-path"
+                        value={target}
+                        onChange={(event) => handleSetTarget(event.target.value)}
+                        placeholder="D:\workspace\project-name"
+                      />
+                      <button type="button" onClick={browseTarget} title="选择本地文件夹"><FolderOpen size={15} /></button>
+                    </div>
+
+                    {action === 'update' && target.trim() && (
+                      <div className="local-inspect-card">
+                        <div className="local-inspect-title">
+                          <span>{inspectingLocal ? '正在检测本地仓库...' : localInspect?.provider ? `${localInspect.provider.toUpperCase()} 工作副本` : '目录状态'}</span>
+                        </div>
+                        {localInspect?.error ? (
+                          <div style={{ color: 'var(--crimson-text)', fontSize: '11px' }}>{localInspect.error}</div>
+                        ) : localInspect?.provider ? (
+                          <div className="local-inspect-details">
+                            {localInspect.branch && <span>分支: <b>{localInspect.branch}</b></span>}
+                            {localInspect.revision && <span>修订: <b>r{localInspect.revision}</b></span>}
+                            {localInspect.url && <span title={localInspect.url}>远端: <b>{localInspect.url}</b></span>}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
-                  <div className="select-wrap">
-                    <GitCommitHorizontal size={15} />
-                    <select
-                      id="version-select"
-                      value={versionId}
-                      onChange={(event) => setVersionId(event.target.value)}
-                    >
-                      {versions.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.label}{item.hash ? `  ·  ${shortHash(item.hash)}` : ''}
-                          </option>
-                      ))}
-                    </select>
-                    <ChevronDown size={14} />
-                  </div>
-                </div>
-                )}
-                {(repo || (provider === 'svn' && action === 'pull')) && (
+
+                  {provider === 'git' && action === 'pull' && (
+                    <div className="field-group">
+                      <div className="label-row">
+                        <label className="field-title">克隆选项</label>
+                      </div>
+                      <div className="push-strategy-pills">
+                        <button
+                          type="button"
+                          className={`push-strategy-pill ${shallowClone ? 'active' : ''}`}
+                          onClick={() => setShallowClone(!shallowClone)}
+                          disabled={running}
+                          title="使用 --depth 1 仅拉取最新一次提交，大幅提升大仓库克隆速度"
+                        >
+                          <Zap size={11} /> 浅克隆 (--depth=1)
+                        </button>
+                        <button
+                          type="button"
+                          className={`push-strategy-pill ${recurseSubmodules ? 'active' : ''}`}
+                          onClick={() => setRecurseSubmodules(!recurseSubmodules)}
+                          disabled={running}
+                          title="使用 --recurse-submodules 同步拉取所有 Git 子模块"
+                        >
+                          <Layers size={11} /> 包含子模块
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="advanced-options-wrapper">
                     <button
                       type="button"
                       className="advanced-toggle-btn"
-                      onClick={() => setShowAdvanced(!showAdvanced)}
+                      onClick={() => {
+                        const next = !showAdvanced
+                        setShowAdvanced(next)
+                        if (next && !repo && url.trim() && !probing) {
+                          probe()
+                        }
+                      }}
                     >
                       <SlidersHorizontal size={13} />
-                      <span>高级选项 {selectedPath ? `(已选子目录: ${selectedPath})` : svnMainlineOnly ? '(仅主线 trunk)' : '(子目录检出 / 主线策略)'}</span>
+                      <span>
+                        子目录按需检出 {selectedPath ? `(仅: ${selectedPath})` : svnMainlineOnly ? '(仅主线 trunk)' : '(Sparse Checkout)'}
+                      </span>
                       <ChevronDown size={13} style={{ transform: showAdvanced ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease' }} />
                     </button>
                     {showAdvanced && (
                       <div className="advanced-options-content">
-                        {repo && (
-                          <div className="field-group browse-group" style={{ marginTop: 8 }}>
-                            <div className="label-row">
-                              <label className="field-title">子目录按需检出 (Sparse Checkout)</label>
-                              <span>{selectedPath ? `已选子目录: ${selectedPath}` : '未选择，默认同步整个仓库'}</span>
-                            </div>
+                        {repo ? (
+                          <div className="field-group browse-group" style={{ marginTop: 4 }}>
                             <DirectoryBrowser
                               entries={browseEntries}
                               path={browsePath}
@@ -1650,9 +2303,23 @@ function App() {
                               action={action}
                             />
                           </div>
+                        ) : (
+                          <div className="discovery-empty" style={{ minHeight: 54 }}>
+                            {probing ? (
+                              <>
+                                <LoaderCircle size={13} className="spin" />
+                                <span>正在读取远程仓库目录结构...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Folder size={13} />
+                                <span>输入仓库地址后点击放大镜即可浏览并勾选子目录</span>
+                              </>
+                            )}
+                          </div>
                         )}
                         {provider === 'svn' && action === 'pull' && (
-                          <div className={`mainline-option ${svnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 8 }}>
+                          <div className={`mainline-option ${svnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 6 }}>
                             <label className="toggle-line">
                               <input
                                 type="checkbox"
@@ -1663,7 +2330,6 @@ function App() {
                               <span className="fake-checkbox"><Check size={12} /></span>
                               <span className="mainline-copy">
                                 <b>仅拉取主线 trunk</b>
-                                <small>自动定位并仅检出 <code>trunk</code>，节省磁盘空间</small>
                               </span>
                             </label>
                             <div className="mainline-actions">
@@ -1679,51 +2345,45 @@ function App() {
                       </div>
                     )}
                   </div>
-                )}
-                <div className="field-group">
-                  <div className="label-row">
-                    <label className="field-title" htmlFor="target-path">本地工作目录</label>
-                    <span>{action === 'pull' ? '选择空目录或输入新路径' : '选择已有代码工作副本目录'}</span>
-                  </div>
-                  <div className="input-with-icon">
-                    <FolderOpen size={15} />
-                    <input
-                      id="target-path"
-                      value={target}
-                      onChange={(event) => handleSetTarget(event.target.value)}
-                      placeholder={action === 'pull' ? '例如：D:\\workspace\\project-name' : '例如：D:\\workspace\\existing-project'}
-                    />
-                    <button onClick={browseTarget} title="浏览选择文件夹"><FolderOpen size={15} /></button>
-                  </div>
 
-                  {/* 本地目录检测反馈卡片 */}
-                  {action === 'update' && target.trim() && (
-                    <div className="local-inspect-card">
-                      <div className="local-inspect-title">
-                        <span>{inspectingLocal ? '正在分析本地仓库...' : localInspect?.provider ? `已识别有效 ${localInspect.provider.toUpperCase()} 工作副本` : '工作目录状态'}</span>
-                        {localInspect?.root && <button type="button" onClick={() => openLocalPath(localInspect.root)} style={{ color: 'var(--cyan-primary)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px' }}><ExternalLink size={11} />打开目录</button>}
+                  {!showAdvanced && recent.length > 0 && (
+                    <div className="single-quick-recent">
+                      <div className="label-row">
+                        <label className="field-title">最近同步快捷载入</label>
+                        <button
+                          type="button"
+                          onClick={() => setMode('history')}
+                          style={{ fontSize: 11, color: 'var(--cyan-primary)', background: 'transparent', padding: 0 }}
+                        >
+                          全部 ({recent.length})
+                        </button>
                       </div>
-                      {localInspect?.error ? (
-                        <div style={{ color: 'var(--crimson-text)', fontSize: '11px' }}>{localInspect.error}</div>
-                      ) : localInspect?.provider ? (
-                        <div className="local-inspect-details">
-                          {localInspect.branch && <span>当前分支: <b>{localInspect.branch}</b></span>}
-                          {localInspect.revision && <span>当前版本: <b>r{localInspect.revision}</b></span>}
-                          {localInspect.url && <span title={localInspect.url}>远端: <b>{localInspect.url}</b></span>}
-                        </div>
-                      ) : null}
+                      <div className="single-quick-list">
+                        {recent.slice(0, 3).map((item) => (
+                          <div key={item.id} className="single-quick-item" onClick={() => loadRecent(item)} title={`点击载入: ${item.target}`}>
+                            <span className={`provider-badge ${item.provider}`}>
+                              <span>{item.provider === 'git' ? 'G' : 'S'}</span>
+                            </span>
+                            <span className="single-quick-path">{item.target}</span>
+                            <span className="single-quick-ver">{item.version || 'HEAD'}</span>
+                            <button
+                              type="button"
+                              className="batch-icon-action"
+                              onClick={(e) => { e.stopPropagation(); openLocalPath(item.target) }}
+                              title="打开本地目录"
+                            >
+                              <FolderOpen size={11} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
-                </div>
-                <div className="execution-note">
-                  <Info size={14} />
-                  <span>认证调用本机 Git Credential Manager 或系统 SSH 秘钥与 SVN 配置，全流程本地执行，不向任何第三方云端传输。</span>
-                </div>
                 </div>
                 <div className="panel-actions">
                   <button className="primary-action" onClick={runTask} disabled={running}>
                     {running ? <LoaderCircle size={16} className="spin" /> : action === 'pull' ? <Download size={16} /> : <RefreshCw size={16} />}
-                    {running ? '任务正在执行...' : action === 'pull' ? '开始拉取代码' : '开始更新代码'}
+                    {running ? '正在执行...' : action === 'pull' ? '开始拉取代码' : '开始更新代码'}
                   </button>
                   <button
                     className="ghost-action"
@@ -1784,7 +2444,26 @@ function App() {
                 onRetryFailed={() => runBatchSync(true)}
                 onCleanUrls={handleCleanBatchUrls}
                 onInsertSamples={handleInsertSamples}
+                onImportFile={handleImportUrlsFromFile}
+                onCopyUrls={handleCopyBatchUrls}
                 onClearUrls={clearBatchUrls}
+                batchShowAdvanced={batchShowAdvanced}
+                setBatchShowAdvanced={setBatchShowAdvanced}
+                activeBatchBrowseItem={activeBatchBrowseItem}
+                setBatchBrowseItemId={(id) => {
+                  setBatchBrowseItemId(id)
+                  const targetItem = batchItems.find((i) => i.id === id)
+                  if (targetItem) navigateBatchBrowse('', targetItem)
+                }}
+                batchBrowseEntries={batchBrowseEntries}
+                batchBrowsePath={batchBrowsePath}
+                batchBrowseLoading={batchBrowseLoading}
+                batchBrowseError={batchBrowseError}
+                activeBatchSelectedSubdir={activeBatchSelectedSubdir}
+                onNavigateBatchBrowse={navigateBatchBrowse}
+                onSelectBatchBrowsePath={selectBatchBrowsePath}
+                onApplySubdirToAll={handleApplySubdirToAll}
+                itemSubdirOverrides={itemSubdirOverrides}
               />
 
               <BatchTaskPanel
@@ -1800,6 +2479,9 @@ function App() {
                 batchItemStatuses={batchItemStatuses}
                 itemBranchOverrides={itemBranchOverrides}
                 onItemBranchChange={handleItemBranchChange}
+                itemSubdirOverrides={itemSubdirOverrides}
+                onOpenItemSubdir={handleOpenBatchItemSubdir}
+                onClearItemSubdir={(itemId) => handleItemSubdirChange(itemId, '')}
                 batchRepoDataMap={batchRepoDataMap}
                 batchProbingMap={batchProbingMap}
                 batchProbeErrorMap={batchProbeErrorMap}
@@ -1813,6 +2495,77 @@ function App() {
                 setBatchViewMode={setBatchViewMode}
               />
             </section>
+          ) : mode === 'push' ? (
+            <section className="sync-layout">
+              <PushSyncPanel
+                pushProvider={pushProvider}
+                setPushProvider={setPushProvider}
+                pushTarget={pushTarget}
+                setPushTarget={handleSetPushTarget}
+                browsePushTarget={browsePushTarget}
+                pushRemoteUrl={pushRemoteUrl}
+                setPushRemoteUrl={handleSetPushRemoteUrl}
+                pushBranch={pushBranch}
+                setPushBranch={setPushBranch}
+                pushCommitMsg={pushCommitMsg}
+                setPushCommitMsg={setPushCommitMsg}
+                pushCommitChanges={pushCommitChanges}
+                setPushCommitChanges={setPushCommitChanges}
+                pushPullBeforePush={pushPullBeforePush}
+                setPushPullBeforePush={setPushPullBeforePush}
+                pushForce={pushForce}
+                setPushForce={setPushForce}
+                pushTags={pushTags}
+                setPushTags={setPushTags}
+                pushWorkspace={pushWorkspace}
+                pushInspecting={pushInspecting}
+                pushInspectError={pushInspectError}
+                pushSelectedFiles={pushSelectedFiles}
+                pushRunning={pushRunning}
+                onInspect={() => inspectPushWorkspaceNow(pushTarget, false)}
+                onOpenLocalPath={openLocalPath}
+                onStartPush={runPushTask}
+              />
+
+              <PushTaskPanel
+                progress={pushProgress}
+                running={pushRunning}
+                elapsedSeconds={pushElapsed}
+                cancelTask={cancelPushTask}
+                clearLogs={() => setPushProgress((current) => ({ ...current, logs: [] }))}
+                pushWorkspace={pushWorkspace}
+                pushInspecting={pushInspecting}
+                pushSelectedFiles={pushSelectedFiles}
+                setPushSelectedFiles={setPushSelectedFiles}
+                pushFilter={pushFilter}
+                setPushFilter={setPushFilter}
+                pushViewMode={pushViewMode}
+                setPushViewMode={setPushViewMode}
+                onRefreshWorkspace={() => inspectPushWorkspaceNow(pushTarget, false)}
+                onOpenFolder={() => openLocalPath(pushTarget)}
+                onViewFileDiff={handleViewFileDiff}
+              />
+            </section>
+          ) : mode === 'workspace' ? (
+            <WorkspacePanel
+              workspaceRoot={workspaceRoot}
+              setWorkspaceRoot={handleSetWorkspaceRoot}
+              onBrowseRoot={browseWorkspaceRoot}
+              onScan={() => scanWorkspaceNow(workspaceRoot, false)}
+              scanning={workspaceScanning}
+              repos={workspaceRepos}
+              filter={workspaceFilter}
+              setFilter={setWorkspaceFilter}
+              typeFilter={workspaceTypeFilter}
+              setTypeFilter={setWorkspaceTypeFilter}
+              updatingMap={workspaceUpdatingMap}
+              batchUpdating={workspaceBatchUpdating}
+              onUpdateSingle={updateSingleWorkspaceRepo}
+              onUpdateAll={updateAllWorkspaceRepos}
+              onJumpToPush={jumpToPushRepo}
+              onJumpToSingle={jumpToSingleRepo}
+              onOpenFolder={openLocalPath}
+            />
           ) : (
             <section className="history-layout">
               <div className="history-panel panel">
@@ -1821,7 +2574,7 @@ function App() {
                     <Search size={14} color="#64748b" />
                     <input
                       className="history-search-input"
-                      placeholder="过滤历史任务 (仓库地址 / 目标目录 / 分支 / 关键字)..."
+                      placeholder="搜索历史记录 (仓库地址 / 目录 / 分支)..."
                       value={historyFilter}
                       onChange={(e) => setHistoryFilter(e.target.value)}
                     />
@@ -1863,10 +2616,9 @@ function App() {
                       if (!recent.length) return
                       setRecent([])
                       localStorage.removeItem('code-sync-recent')
-                      showToast('已清空全部历史任务记录')
+                      showToast('已清空历史记录')
                     }}
                     disabled={!recent.length}
-                    title="清空当前所有历史任务归档"
                   >
                     <Trash2 size={13} />
                     <span>清空记录</span>
@@ -1877,11 +2629,11 @@ function App() {
                   <div className="history-table-header">
                     <span>#</span>
                     <span>引擎</span>
-                    <span>操作</span>
+                    <span>类型</span>
                     <span>远程仓库地址</span>
-                    <span>分支 / 修订版</span>
-                    <span>本地工作目录</span>
-                    <span>执行时间</span>
+                    <span>分支 / 版本</span>
+                    <span>本地目录</span>
+                    <span>时间</span>
                     <span style={{ textAlign: 'center' }}>操作</span>
                   </div>
 
@@ -1898,7 +2650,7 @@ function App() {
                           </span>
                           <span>
                             <span className={`action-pill ${entry.action}`}>
-                              {entry.action === 'pull' ? '克隆' : '更新'}
+                              {entry.action === 'pull' ? '克隆' : entry.action === 'push' ? '推送' : '更新'}
                             </span>
                           </span>
                           <span className="history-col-url" title={entry.url || '未记录地址'}>
@@ -1912,7 +2664,7 @@ function App() {
                           </span>
                           <span
                             className="history-col-path"
-                            title={`点击在系统资源管理器中打开: ${entry.target}`}
+                            title={`点击打开目录: ${entry.target}`}
                             onClick={() => openLocalPath(entry.target)}
                           >
                             {entry.target}
@@ -1926,7 +2678,7 @@ function App() {
                               type="button"
                               className="history-action-btn"
                               onClick={() => loadRecent(entry)}
-                              title="重载此配置并返回单仓工作台"
+                              title="载入此任务配置"
                             >
                               <RotateCcw size={13} />
                             </button>
@@ -1934,7 +2686,7 @@ function App() {
                               type="button"
                               className="history-action-btn"
                               onClick={() => openLocalPath(entry.target)}
-                              title="在文件管理器中打开"
+                              title="打开本地文件夹"
                             >
                               <FolderOpen size={13} />
                             </button>
@@ -1942,7 +2694,7 @@ function App() {
                               type="button"
                               className="history-action-btn danger"
                               onClick={() => removeRecent(entry.id)}
-                              title="删除此记录"
+                              title="删除记录"
                             >
                               <X size={13} />
                             </button>
@@ -1951,13 +2703,8 @@ function App() {
                       ))
                     ) : (
                       <div className="history-empty">
-                        <History size={36} />
-                        <h3>{recent.length ? '未找到符合条件的任务记录' : '暂无历史同步记录'}</h3>
-                        <p>
-                          {recent.length
-                            ? '请尝试更换搜索关键字或清除过滤器。'
-                            : '在单仓模式或多仓批量模式成功执行拉取/更新任务后，任务参数与执行结果将自动归档在此。'}
-                        </p>
+                        <History size={32} />
+                        <h3>{recent.length ? '未找到匹配的记录' : '暂无同步记录'}</h3>
                       </div>
                     )}
                   </div>
@@ -1965,13 +2712,9 @@ function App() {
               </div>
             </section>
           )}
-
-          <footer className="page-footer">
-            <span>CODESYNC STUDIO // DESKTOP EDITION 1.3.1</span>
-            <span>核心状态：GIT CLI READY · SVN CLI READY · LOCAL ENCRYPTION ACTIVE</span>
-          </footer>
         </div>
       </main>
+      </div>
 
       {toast && <div className="toast"><CheckCircle2 size={16} />{toast}</div>}
       {settingsOpen && (
@@ -2020,25 +2763,43 @@ function BatchSyncPanel({
   onRetryFailed,
   onCleanUrls,
   onInsertSamples,
-  onClearUrls
+  onImportFile,
+  onCopyUrls,
+  onClearUrls,
+  batchShowAdvanced,
+  setBatchShowAdvanced,
+  activeBatchBrowseItem,
+  setBatchBrowseItemId,
+  batchBrowseEntries,
+  batchBrowsePath,
+  batchBrowseLoading,
+  batchBrowseError,
+  activeBatchSelectedSubdir,
+  onNavigateBatchBrowse,
+  onSelectBatchBrowsePath,
+  onApplySubdirToAll,
+  itemSubdirOverrides
 }) {
   const currentUrls = batchProvider === 'git' ? batchGitUrls : batchSvnUrls
   const setUrls = batchProvider === 'git' ? setBatchGitUrls : setBatchSvnUrls
   const failedCount = batchItems.filter((item) => batchItemStatuses[item.id]?.status === 'error').length
+  const configuredSubdirCount = batchItems.filter((item) => {
+    const val = itemSubdirOverrides?.[item.id] !== undefined ? itemSubdirOverrides[item.id] : item.parsedSubdir
+    return Boolean(val && val.trim())
+  }).length
 
   return (
-    <div className="sync-panel panel">
+    <div className="sync-panel batch-sync-panel panel">
       <div className="panel-heading">
-        <div>
-          <p className="section-kicker">// STEP 01 CONFIGURATION</p>
-          <h2>配置批量任务队列</h2>
-        </div>
-        <span className="secure-label"><Check size={12} /> 独立隔离调度</span>
+        <h2>批量拉取配置</h2>
+        <span className="secure-label"><Check size={12} /> {batchProvider.toUpperCase()} 队列</span>
       </div>
 
-      <div className="sync-panel-content">
+      <div className={`sync-panel-content batch-panel-content ${batchShowAdvanced ? 'advanced-open' : ''}`}>
         <div className="field-group">
-          <label className="field-title">版本控制引擎 (Git 与 SVN 独立隔离)</label>
+          <div className="label-row">
+            <label className="field-title">版本控制引擎</label>
+          </div>
           <div className="segmented-control">
             <button
               type="button"
@@ -2046,7 +2807,7 @@ function BatchSyncPanel({
               onClick={() => setBatchProvider('git')}
               disabled={batchRunning}
             >
-              <GitBranch size={16} /> Git 批量拉取
+              <GitBranch size={15} /> Git 批量拉取
             </button>
             <button
               type="button"
@@ -2054,17 +2815,17 @@ function BatchSyncPanel({
               onClick={() => setBatchProvider('svn')}
               disabled={batchRunning}
             >
-              <Server size={16} /> SVN 批量拉取
+              <Server size={15} /> SVN 批量拉取
             </button>
           </div>
         </div>
 
-        <div className="field-group">
+        <div className="field-group batch-urls-group">
           <div className="label-row">
             <label className="field-title" htmlFor="batch-urls-input">
               {batchProvider === 'git' ? 'Git 仓库地址列表' : 'SVN 仓库地址列表'}
             </label>
-            <span>一行一个仓库 · 已解析 {batchItems.length} 项</span>
+            <span>已解析 <b>{batchItems.length}</b> 项</span>
           </div>
           <div className="batch-textarea-wrap">
             <textarea
@@ -2075,17 +2836,19 @@ function BatchSyncPanel({
               disabled={batchRunning}
               placeholder={
                 batchProvider === 'git'
-                  ? "每行输入一个 Git 仓库链接，可在链接后指定分支，例如：\nhttps://github.com/organization/repo-one.git\nhttps://github.com/organization/repo-two.git dev\nhttps://github.com/organization/repo-three.git#release-4.0"
-                  : "每行输入一个 SVN 仓库链接，可在链接后指定分支或修订号，例如：\nhttps://svn.example.com/svn/project-a/trunk\nhttps://svn.example.com/svn/project-b/trunk 1024\nhttps://svn.example.com/svn/project-c@2048"
+                  ? "每行输入一个 Git 仓库地址 (可选附加分支与子目录)：\nhttps://github.com/org/repo-one.git\nhttps://github.com/org/repo-two.git dev src/core"
+                  : "每行输入一个 SVN 仓库地址 (可选附加修订号或子目录)：\nhttps://svn.example.com/svn/project-a/trunk\nhttps://svn.example.com/svn/project-b/trunk 1024"
               }
             />
           </div>
           <div className="batch-textarea-toolbar">
             <div className="batch-textarea-actions">
-              <button type="button" className="batch-text-btn" onClick={onInsertSamples} disabled={batchRunning} title="插入测试样例链接"><Sparkles size={11} />样例链接</button>
-              <button type="button" className="batch-text-btn" onClick={onCleanUrls} disabled={batchRunning || !currentUrls.trim()} title="去除空行与重复链接"><RefreshCw size={11} />整理去重</button>
+              <button type="button" className="batch-text-btn" onClick={onImportFile} disabled={batchRunning} title="从本地 .txt 文本文件导入链接列表"><FolderOpen size={11} />导入文件</button>
+              <button type="button" className="batch-text-btn" onClick={onInsertSamples} disabled={batchRunning} title="插入示例链接"><Sparkles size={11} />示例</button>
+              <button type="button" className="batch-text-btn" onClick={onCleanUrls} disabled={batchRunning || !currentUrls.trim()} title="去除空行与重复链接"><RefreshCw size={11} />去重</button>
+              <button type="button" className="batch-text-btn" onClick={onCopyUrls} disabled={!currentUrls.trim()} title="复制当前全部链接"><Copy size={11} />复制</button>
             </div>
-            <button type="button" className="batch-text-btn" onClick={onClearUrls} disabled={batchRunning || !currentUrls.trim()} style={{ color: 'var(--crimson-text)' }} title="清空全部输入"><Trash2 size={11} />清空</button>
+            <button type="button" className="batch-text-btn" onClick={onClearUrls} disabled={batchRunning || !currentUrls.trim()} style={{ color: 'var(--crimson-text)' }} title="清空列表"><Trash2 size={11} />清空</button>
           </div>
           {protocolWarning && (
             <div className="batch-alert warning">
@@ -2095,10 +2858,92 @@ function BatchSyncPanel({
           )}
         </div>
 
+        <div className="advanced-options-wrapper batch-advanced-wrapper">
+          <button
+            type="button"
+            className="advanced-toggle-btn"
+            onClick={() => setBatchShowAdvanced(!batchShowAdvanced)}
+          >
+            <SlidersHorizontal size={13} />
+            <span>
+              子目录按需检出 {configuredSubdirCount > 0 ? `(已配 ${configuredSubdirCount} 项)` : '(Sparse Checkout)'}
+            </span>
+            <ChevronDown size={13} style={{ transform: batchShowAdvanced ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease' }} />
+          </button>
+          {batchShowAdvanced && (
+            <div className="advanced-options-content batch-advanced-content">
+              <div className="batch-browse-toolbar">
+                <div className="select-wrap batch-browse-repo-select">
+                  <Folder size={13} />
+                  <select
+                    value={activeBatchBrowseItem?.id || ''}
+                    onChange={(e) => setBatchBrowseItemId(e.target.value)}
+                    disabled={!batchItems.length || batchRunning}
+                    title="选择要浏览目录树的仓库"
+                  >
+                    {batchItems.length ? (
+                      batchItems.map((it, idx) => {
+                        const sub = itemSubdirOverrides?.[it.id] !== undefined ? itemSubdirOverrides[it.id] : it.parsedSubdir
+                        return (
+                          <option key={it.id} value={it.id}>
+                            #{idx + 1} {it.name}{sub ? ` (${sub})` : ''}
+                          </option>
+                        )
+                      })
+                    ) : (
+                      <option value="">请先输入仓库地址</option>
+                    )}
+                  </select>
+                  <ChevronDown size={12} />
+                </div>
+                <div className="input-with-icon batch-subdir-input">
+                  <FolderOpen size={13} />
+                  <input
+                    value={activeBatchSelectedSubdir}
+                    onChange={(e) => onSelectBatchBrowsePath(e.target.value)}
+                    disabled={!activeBatchBrowseItem || batchRunning}
+                    placeholder="选择或输入子目录 (如 src/core)"
+                  />
+                  {activeBatchSelectedSubdir && (
+                    <button type="button" onClick={() => onSelectBatchBrowsePath('')} title="清除子目录">
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="batch-fetch-all-btn"
+                  onClick={() => onApplySubdirToAll(activeBatchSelectedSubdir)}
+                  disabled={!batchItems.length || batchRunning}
+                  title="将该子目录应用到全部仓库"
+                >
+                  应用全部
+                </button>
+              </div>
+              {activeBatchBrowseItem ? (
+                <DirectoryBrowser
+                  entries={batchBrowseEntries}
+                  path={batchBrowsePath}
+                  loading={batchBrowseLoading}
+                  error={batchBrowseError}
+                  selectedPath={activeBatchSelectedSubdir}
+                  onNavigate={(p) => onNavigateBatchBrowse(p, activeBatchBrowseItem)}
+                  onSelect={onSelectBatchBrowsePath}
+                  action="pull"
+                />
+              ) : (
+                <div className="discovery-empty" style={{ minHeight: 50 }}>
+                  <Folder size={13} />
+                  <span>请先在上方输入仓库地址后再浏览目录</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="field-group">
           <div className="label-row">
             <label className="field-title" htmlFor="batch-target-root">本地保存根目录</label>
-            <span>每个项目将自动在该根目录下创建独立子目录</span>
           </div>
           <div className="input-with-icon">
             <FolderOpen size={15} />
@@ -2107,9 +2952,9 @@ function BatchSyncPanel({
               value={batchTargetRoot}
               onChange={(e) => setBatchTargetRoot(e.target.value)}
               disabled={batchRunning}
-              placeholder="例如：D:\\workspace\\my-projects"
+              placeholder="D:\workspace\my-projects"
             />
-            <button onClick={browseBatchTargetRoot} title="浏览选择根目录" disabled={batchRunning}>
+            <button type="button" onClick={browseBatchTargetRoot} title="浏览选择根目录" disabled={batchRunning}>
               <FolderOpen size={15} />
             </button>
           </div>
@@ -2117,8 +2962,10 @@ function BatchSyncPanel({
 
         <div className="batch-options-grid">
           <div className="field-group" style={{ marginTop: 0 }}>
-            <label className="field-title" htmlFor="batch-conflict-select">目标目录已存在策略</label>
-            <div className="select-wrap" style={{ marginTop: 7 }}>
+            <div className="label-row">
+              <label className="field-title" htmlFor="batch-conflict-select">已存在目录策略</label>
+            </div>
+            <div className="select-wrap">
               <RefreshCw size={14} />
               <select
                 id="batch-conflict-select"
@@ -2126,9 +2973,9 @@ function BatchSyncPanel({
                 onChange={(e) => setBatchConflictStrategy(e.target.value)}
                 disabled={batchRunning}
               >
-                <option value="update">自动更新已有仓库 (智能增量同步)</option>
-                <option value="skip">跳过已存在的目录 (不覆盖)</option>
-                <option value="error">标记错误并继续下一项</option>
+                <option value="update">自动增量更新</option>
+                <option value="skip">跳过已有目录</option>
+                <option value="error">标记错误并继续</option>
               </select>
               <ChevronDown size={14} />
             </div>
@@ -2137,32 +2984,33 @@ function BatchSyncPanel({
           {batchProvider === 'git' ? (
             <div className="field-group" style={{ marginTop: 0 }}>
               <div className="label-row">
-                <label className="field-title" htmlFor="batch-git-branch">全局默认分支 (可选)</label>
+                <label className="field-title" htmlFor="batch-git-branch">全局默认分支</label>
                 <button
                   type="button"
                   onClick={onApplyGlobalBranch}
                   disabled={batchRunning || !batchGitBranch.trim()}
                   style={{ fontSize: 11, color: 'var(--cyan-primary)', background: 'transparent', padding: 0 }}
-                  title="将此分支应用到右侧所有未指定分支的项目"
                 >
-                  应用到全部
+                  应用全部
                 </button>
               </div>
-              <div className="input-with-icon" style={{ marginTop: 7 }}>
+              <div className="input-with-icon">
                 <GitBranch size={14} />
                 <input
                   id="batch-git-branch"
                   value={batchGitBranch}
                   onChange={(e) => setBatchGitBranch(e.target.value)}
                   disabled={batchRunning}
-                  placeholder="统一默认拉取分支 (留空拉取主线)"
+                  placeholder="留空拉取默认主线"
                 />
               </div>
             </div>
           ) : (
             <div className="field-group" style={{ marginTop: 0 }}>
-              <label className="field-title">SVN 主线策略</label>
-              <div className={`mainline-option ${batchSvnMainlineOnly ? 'enabled' : ''}`} style={{ marginTop: 7, minHeight: 42, padding: '8px 12px' }}>
+              <div className="label-row">
+                <label className="field-title">SVN 主线策略</label>
+              </div>
+              <div className={`mainline-option batch-mainline-option ${batchSvnMainlineOnly ? 'enabled' : ''}`}>
                 <label className="toggle-line">
                   <input
                     type="checkbox"
@@ -2172,18 +3020,12 @@ function BatchSyncPanel({
                   />
                   <span className="fake-checkbox"><Check size={12} /></span>
                   <span className="mainline-copy">
-                    <b>仅拉取主线 trunk</b>
-                    <small>若未指定分支且链接包含 trunk 自动仅检出 trunk</small>
+                    <b>仅检出 trunk 主线</b>
                   </span>
                 </label>
               </div>
             </div>
           )}
-        </div>
-
-        <div className="execution-note">
-          <Info size={14} />
-          <span>在右侧可直接查看解析清单，支持独立下拉选择分支、批量预检及单独执行。</span>
         </div>
       </div>
 
@@ -2195,7 +3037,7 @@ function BatchSyncPanel({
           disabled={batchRunning || !batchItems.length}
         >
           {batchRunning ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}
-          {batchRunning ? '批量任务执行中...' : `开始批量拉取 (${batchItems.length} 个项目)`}
+          {batchRunning ? '批量执行中...' : `开始批量拉取 (${batchItems.length})`}
         </button>
 
         {failedCount > 0 && (
@@ -2204,10 +3046,10 @@ function BatchSyncPanel({
             className="ghost-action"
             onClick={onRetryFailed}
             disabled={batchRunning}
-            title="仅重试本次批量失败的项目"
+            title="仅重试失败项目"
           >
             <RotateCcw size={14} />
-            重试失败项 ({failedCount})
+            重试 ({failedCount})
           </button>
         )}
       </div>
@@ -2228,6 +3070,9 @@ function BatchTaskPanel({
   batchItemStatuses,
   itemBranchOverrides,
   onItemBranchChange,
+  itemSubdirOverrides,
+  onOpenItemSubdir,
+  onClearItemSubdir,
   batchRepoDataMap,
   batchProbingMap,
   batchProbeErrorMap,
@@ -2301,7 +3146,7 @@ function BatchTaskPanel({
       <div className="batch-queue-col-headers">
         <span>#</span>
         <span>项目名称</span>
-        <span>版本/分支下拉选择</span>
+        <span>版本/分支与子目录选择</span>
         <span>目标目录</span>
         <span style={{ textAlign: 'center' }}>执行状态</span>
         <span style={{ textAlign: 'center' }}>操作</span>
@@ -2326,6 +3171,10 @@ function BatchTaskPanel({
               ? itemBranchOverrides[item.id]
               : (item.parsedBranch || 'default')
 
+            const currentSubdir = itemSubdirOverrides?.[item.id] !== undefined
+              ? itemSubdirOverrides[item.id]
+              : (item.parsedSubdir || '')
+
             return (
               <div key={item.id} className={`batch-queue-item ${itemStatusClass}`}>
                 <span className="batch-item-index">#{index + 1}</span>
@@ -2333,7 +3182,7 @@ function BatchTaskPanel({
 
                 <div className="batch-version-select-wrap">
                   {isProbing ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--cyan-primary)', fontSize: 11 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--cyan-primary)', fontSize: 11, flex: 1 }}>
                       <LoaderCircle size={11} className="spin" />
                       <span>读取中..</span>
                     </div>
@@ -2398,9 +3247,33 @@ function BatchTaskPanel({
                   >
                     {isProbing ? <LoaderCircle size={11} className="spin" /> : <Search size={11} />}
                   </button>
+
+                  <button
+                    type="button"
+                    className={`batch-subdir-btn ${currentSubdir ? 'active' : ''}`}
+                    onClick={() => onOpenItemSubdir(item)}
+                    disabled={running}
+                    title={currentSubdir ? `当前仅拉取子目录: ${currentSubdir}（点击修改）` : '点击按需选择只拉取某个子目录 (Sparse Checkout)'}
+                  >
+                    <Folder size={10} />
+                    <span>{currentSubdir ? currentSubdir.split('/').pop() : '子目录'}</span>
+                  </button>
+                  {currentSubdir && (
+                    <button
+                      type="button"
+                      className="batch-subdir-clear-btn"
+                      onClick={() => onClearItemSubdir(item.id)}
+                      disabled={running}
+                      title={`取消子目录限制 (${currentSubdir})`}
+                    >
+                      <X size={9} />
+                    </button>
+                  )}
                 </div>
 
-                <span className="batch-item-target" title={item.target}>{item.target}</span>
+                <span className="batch-item-target" title={currentSubdir ? `${item.target} (仅检出: ${currentSubdir})` : item.target}>
+                  {item.target}
+                </span>
                 <span className={`batch-status-badge ${itemStatusClass}`} title={itemState.error || ''}>
                   {itemStatusClass === 'running' && <LoaderCircle size={9} className="spin" />}
                   {itemStatusClass === 'success' && <Check size={9} />}
@@ -2426,7 +3299,7 @@ function BatchTaskPanel({
           })
         ) : (
           <div className="batch-queue-empty">
-            <Layers size={22} />
+            <Layers size={18} />
             <span>暂未解析到仓库地址</span>
             <small>在左侧文本框中输入或粘贴仓库链接后，列表将自动生成</small>
           </div>
@@ -2437,26 +3310,27 @@ function BatchTaskPanel({
 
   const renderTerminal = (isSplit = false) => (
     <div className={`batch-terminal-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
-      <div className="log-heading">
-        <span><Terminal size={13} />批量命令实时流</span>
-        <div className="log-tools">
-          <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
-            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部输出' : '仅看错误'}
-          </button>
-          <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
-            {autoScroll ? '锁定滚动' : '跟随滚动'}
-          </button>
-          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制日志</button>
-          <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
-        </div>
-      </div>
-
       <div className="terminal-window">
-        <div className="terminal-header-dots">
-          <span className="terminal-dot red" />
-          <span className="terminal-dot yellow" />
-          <span className="terminal-dot green" />
-          <span style={{ fontSize: '11px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync ~ batch-queue</span>
+        <div className="terminal-header-dots batch-terminal-header">
+          <div className="terminal-header-left">
+            <span className="terminal-dot red" />
+            <span className="terminal-dot yellow" />
+            <span className="terminal-dot green" />
+            <span className="terminal-title-label">
+              <Terminal size={12} />
+              <b>终端输出</b>
+            </span>
+          </div>
+          <div className="log-tools">
+            <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
+              <Filter size={10} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
+            </button>
+            <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
+              {autoScroll ? '锁定滚动' : '跟随滚动'}
+            </button>
+            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
+            <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+          </div>
         </div>
         <div className="terminal-output" ref={terminalRef}>
           {filteredLogs.length ? (
@@ -2468,9 +3342,8 @@ function BatchTaskPanel({
             ))
           ) : (
             <div className="terminal-placeholder">
-              <Terminal size={22} />
-              <span>等待批量任务启动...</span>
-              <small>各仓库的拉取输出流会在此有序滚动呈现</small>
+              <Terminal size={18} />
+              <span>等待任务启动</span>
             </div>
           )}
         </div>
@@ -2479,12 +3352,9 @@ function BatchTaskPanel({
   )
 
   return (
-    <div className="task-panel panel">
+    <div className="task-panel batch-task-panel panel">
       <div className="panel-heading">
-        <div>
-          <p className="section-kicker">// STEP 02 QUEUE & TELEMETRY</p>
-          <h2>批量队列与实时遥测</h2>
-        </div>
+        <h2>批量队列与遥测</h2>
         <div className="batch-view-segmented">
           <button
             type="button"
@@ -2502,7 +3372,7 @@ function BatchTaskPanel({
             title="全屏查看命令行实时日志"
           >
             <Terminal size={12} />
-            <span>终端遥测</span>
+            <span>终端</span>
           </button>
           <button
             type="button"
@@ -2511,39 +3381,40 @@ function BatchTaskPanel({
             title="分屏对照查看清单与终端"
           >
             <Columns2 size={12} />
-            <span>分屏对照</span>
+            <span>分屏</span>
           </button>
         </div>
       </div>
 
-      <div className="progress-overview">
-        <div className="progress-ring">
-          <svg viewBox="0 0 42 42">
-            <circle className="ring-track" cx="21" cy="21" r="17" />
-            <circle
-              className={`ring-value ${statusClass}`}
-              cx="21"
-              cy="21"
-              r="17"
-              pathLength="100"
-              strokeDasharray={`${progress.value} 100`}
-            />
-          </svg>
-          <strong>{Math.round(progress.value)}<small>%</small></strong>
-        </div>
-        <div className="progress-copy">
-          <b>{progress.label}</b>
-          <div className="batch-stats-row">
-            <span className="batch-stats-item">总计: <b>{progress.totalCount || batchItems.length}</b></span>
-            <span className="batch-stats-item success">成功: <b>{progress.successCount || 0}</b></span>
-            <span className="batch-stats-item error">失败: <b>{progress.errorCount || 0}</b></span>
-            <span className="batch-stats-item skipped">跳过: <b>{progress.skippedCount || 0}</b></span>
+      <div className="batch-telemetry-bar">
+        <div className="batch-telemetry-status">
+          <div className="progress-ring compact-ring">
+            <svg viewBox="0 0 42 42">
+              <circle className="ring-track" cx="21" cy="21" r="17" />
+              <circle
+                className={`ring-value ${statusClass}`}
+                cx="21"
+                cy="21"
+                r="17"
+                pathLength="100"
+                strokeDasharray={`${progress.value} 100`}
+              />
+            </svg>
+            <strong>{Math.round(progress.value)}<small>%</small></strong>
+          </div>
+          <div className="batch-telemetry-copy">
+            <b>{progress.label}</b>
+            <div className="bar-track compact-bar-track">
+              <span style={{ width: `${Math.max(0, Math.min(100, progress.value))}%` }} />
+            </div>
           </div>
         </div>
-      </div>
-
-      <div className="bar-track">
-        <span style={{ width: `${Math.max(0, Math.min(100, progress.value))}%` }} />
+        <div className="batch-stats-row">
+          <span className="batch-stats-item">总计 <b>{progress.totalCount || batchItems.length}</b></span>
+          <span className="batch-stats-item success">成功 <b>{progress.successCount || 0}</b></span>
+          <span className="batch-stats-item error">失败 <b>{progress.errorCount || 0}</b></span>
+          <span className="batch-stats-item skipped">跳过 <b>{progress.skippedCount || 0}</b></span>
+        </div>
       </div>
 
       <div className="batch-views-body">
@@ -2558,16 +3429,870 @@ function BatchTaskPanel({
       </div>
 
       <div className="task-bottom">
-        <span><Zap size={13} />{running ? `批量任务运行中 · 已耗时 ${formatDuration(elapsedSeconds)}` : '批量引擎待命'}</span>
-        {running ? (
-          <button className="stop-button" onClick={cancelTask}><Square size={13} />停止批量任务</button>
-        ) : (
-          <span style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Play size={11} />执行期间请保持应用窗口开启
-          </span>
+        <span><Zap size={13} />{running ? `批量执行中 · ${formatDuration(elapsedSeconds)}` : '引擎就绪'}</span>
+        {running && (
+          <button className="stop-button" onClick={cancelTask}><Square size={13} />停止任务</button>
         )}
       </div>
     </div>
+  )
+}
+
+function PushSyncPanel({
+  pushProvider,
+  setPushProvider,
+  pushTarget,
+  setPushTarget,
+  browsePushTarget,
+  pushRemoteUrl,
+  setPushRemoteUrl,
+  pushBranch,
+  setPushBranch,
+  pushCommitMsg,
+  setPushCommitMsg,
+  pushCommitChanges,
+  setPushCommitChanges,
+  pushPullBeforePush,
+  setPushPullBeforePush,
+  pushForce,
+  setPushForce,
+  pushTags,
+  setPushTags,
+  pushWorkspace,
+  pushInspecting,
+  pushInspectError,
+  pushSelectedFiles,
+  pushRunning,
+  onInspect,
+  onOpenLocalPath,
+  onStartPush
+}) {
+  const commitTemplates = [
+    { label: 'feat: 新功能', prefix: 'feat: ' },
+    { label: 'fix: 修复', prefix: 'fix: ' },
+    { label: 'chore: 维护', prefix: 'chore: ' },
+    { label: 'docs: 文档', prefix: 'docs: ' },
+    { label: 'refactor: 重构', prefix: 'refactor: ' }
+  ]
+
+  const applyPrefix = (prefix) => {
+    setPushCommitMsg((prev) => {
+      const stripped = prev.replace(/^(feat|fix|chore|docs|refactor|style|perf|test):\s*/i, '')
+      return `${prefix}${stripped}`
+    })
+  }
+
+  return (
+    <div className="sync-panel batch-sync-panel push-sync-panel panel">
+      <div className="panel-heading">
+        <h2>代码推送配置</h2>
+        <span className="secure-label"><Upload size={12} /> {pushProvider.toUpperCase()} 推送</span>
+      </div>
+
+      <div className="sync-panel-content batch-panel-content">
+        <div className="field-group">
+          <div className="label-row">
+            <label className="field-title">版本控制引擎</label>
+          </div>
+          <div className="segmented-control">
+            <button
+              type="button"
+              className={pushProvider === 'git' ? 'selected git-selected' : ''}
+              onClick={() => setPushProvider('git')}
+              disabled={pushRunning}
+            >
+              <GitBranch size={15} /> Git 代码推送
+            </button>
+            <button
+              type="button"
+              className={pushProvider === 'svn' ? 'selected svn-selected' : ''}
+              onClick={() => setPushProvider('svn')}
+              disabled={pushRunning}
+            >
+              <Server size={15} /> SVN 提交推送
+            </button>
+          </div>
+        </div>
+
+        <div className="field-group">
+          <div className="label-row">
+            <label className="field-title" htmlFor="push-target-input">本地项目目录</label>
+            {pushWorkspace?.root && (
+              <button
+                type="button"
+                onClick={() => onOpenLocalPath(pushWorkspace.root)}
+                style={{ color: 'var(--cyan-primary)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', background: 'transparent', padding: 0 }}
+              >
+                <ExternalLink size={11} />打开目录
+              </button>
+            )}
+          </div>
+          <div className="input-with-icon">
+            <FolderOpen size={15} />
+            <input
+              id="push-target-input"
+              value={pushTarget}
+              onChange={(e) => setPushTarget(e.target.value)}
+              disabled={pushRunning}
+              placeholder="D:\workspace\my-project"
+            />
+            <button type="button" onClick={browsePushTarget} title="选择本地项目文件夹" disabled={pushRunning}>
+              <FolderOpen size={15} />
+            </button>
+            <button type="button" onClick={onInspect} title="重新扫描本地目录状态" disabled={pushRunning || !pushTarget.trim()}>
+              <RefreshCw size={14} className={pushInspecting ? 'spin' : ''} />
+            </button>
+          </div>
+
+          {pushTarget.trim() && (
+            <div className="local-inspect-card push-inspect-card">
+              <div className="local-inspect-title">
+                <span>
+                  {pushInspecting
+                    ? '正在扫描工作区...'
+                    : pushInspectError
+                    ? '目录扫描异常'
+                    : pushWorkspace?.initialized
+                    ? `${pushWorkspace.provider?.toUpperCase()} 仓库 · ${pushWorkspace.changes?.length || 0} 项改动`
+                    : `未初始化目录 · 自动 git init (${pushWorkspace?.changes?.length || 0} 个文件)`}
+                </span>
+              </div>
+              {pushInspectError ? (
+                <div style={{ color: 'var(--crimson-text)', fontSize: '11px' }}>{pushInspectError}</div>
+              ) : pushWorkspace ? (
+                <div className="local-inspect-details">
+                  {pushWorkspace.branch && <span>分支: <b>{pushWorkspace.branch}</b></span>}
+                  {pushWorkspace.ahead > 0 && <span>待推: <b style={{ color: 'var(--emerald-text)' }}>↑{pushWorkspace.ahead}</b></span>}
+                  {pushWorkspace.lastCommit && <span title={pushWorkspace.lastCommit}>最新: <b>{pushWorkspace.lastCommit}</b></span>}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+
+        <div className="field-group">
+          <div className="label-row">
+            <label className="field-title" htmlFor="push-remote-url">
+              {pushProvider === 'git' ? '远程 Git 仓库地址 (origin)' : '远程 SVN 仓库地址'}
+            </label>
+          </div>
+          <div className="input-with-icon">
+            <Upload size={15} />
+            <input
+              id="push-remote-url"
+              value={pushRemoteUrl}
+              onChange={(e) => setPushRemoteUrl(e.target.value)}
+              disabled={pushRunning || pushProvider === 'svn'}
+              placeholder={
+                pushProvider === 'git'
+                  ? 'https://github.com/org/repo.git 或 git@github.com:org/repo.git'
+                  : '选择本地 SVN 目录后自动显示关联地址'
+              }
+            />
+          </div>
+        </div>
+
+        {pushProvider === 'git' && (
+          <div className="batch-options-grid">
+            <div className="field-group" style={{ marginTop: 0 }}>
+              <div className="label-row">
+                <label className="field-title" htmlFor="push-branch-input">推送分支</label>
+                {pushWorkspace?.branches?.length > 1 && (
+                  <select
+                    className="push-branch-quick-select"
+                    value={pushBranch}
+                    onChange={(e) => setPushBranch(e.target.value)}
+                    disabled={pushRunning}
+                  >
+                    {pushWorkspace.branches.map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div className="input-with-icon">
+                <GitBranch size={14} />
+                <input
+                  id="push-branch-input"
+                  value={pushBranch}
+                  onChange={(e) => setPushBranch(e.target.value)}
+                  disabled={pushRunning}
+                  placeholder="main / master / dev"
+                />
+              </div>
+            </div>
+
+            <div className="field-group" style={{ marginTop: 0 }}>
+              <div className="label-row">
+                <label className="field-title">推送策略</label>
+              </div>
+              <div className="push-strategy-pills">
+                <button
+                  type="button"
+                  className={`push-strategy-pill ${pushCommitChanges ? 'active' : ''}`}
+                  onClick={() => setPushCommitChanges(!pushCommitChanges)}
+                  disabled={pushRunning}
+                  title="推送前自动暂存并提交已勾选的改动文件"
+                >
+                  <Check size={11} />自动提交
+                </button>
+                <button
+                  type="button"
+                  className={`push-strategy-pill ${pushPullBeforePush ? 'active' : ''}`}
+                  onClick={() => setPushPullBeforePush(!pushPullBeforePush)}
+                  disabled={pushRunning || pushForce}
+                  title="推送前先执行 git pull --rebase 同步远端提交，防止冲突"
+                >
+                  <RefreshCw size={10} />先拉再推
+                </button>
+                <button
+                  type="button"
+                  className={`push-strategy-pill warning ${pushForce ? 'active' : ''}`}
+                  onClick={() => setPushForce(!pushForce)}
+                  disabled={pushRunning}
+                  title="使用 --force-with-lease 安全强推"
+                >
+                  <Zap size={11} />强推
+                </button>
+                <button
+                  type="button"
+                  className={`push-strategy-pill ${pushTags ? 'active' : ''}`}
+                  onClick={() => setPushTags(!pushTags)}
+                  disabled={pushRunning}
+                  title="同时推送本地所有标签 (--tags)"
+                >
+                  <GitCommitHorizontal size={11} />标签
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="field-group batch-urls-group">
+          <div className="label-row">
+            <label className="field-title" htmlFor="push-commit-msg">提交说明 (Commit Message)</label>
+            <span>已选 <b>{pushSelectedFiles.length}</b> 项</span>
+          </div>
+          <div className="batch-textarea-wrap">
+            <textarea
+              id="push-commit-msg"
+              className="batch-textarea"
+              value={pushCommitMsg}
+              onChange={(e) => setPushCommitMsg(e.target.value)}
+              disabled={pushRunning || (pushProvider === 'git' && !pushCommitChanges)}
+              placeholder="输入本次提交说明，例如：feat: 更新核心模块代码（留空使用默认说明）"
+            />
+          </div>
+          <div className="batch-textarea-toolbar">
+            <div className="batch-textarea-actions">
+              {commitTemplates.map((tpl) => (
+                <button
+                  key={tpl.prefix}
+                  type="button"
+                  className="batch-text-btn"
+                  onClick={() => applyPrefix(tpl.prefix)}
+                  disabled={pushRunning}
+                >
+                  {tpl.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="batch-text-btn"
+              onClick={() => setPushCommitMsg('')}
+              disabled={pushRunning || !pushCommitMsg}
+              style={{ color: 'var(--crimson-text)' }}
+            >
+              <Trash2 size={11} />清空
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel-actions">
+        <button
+          type="button"
+          className="primary-action"
+          onClick={onStartPush}
+          disabled={pushRunning || !pushTarget.trim()}
+        >
+          {pushRunning ? <LoaderCircle size={16} className="spin" /> : <Upload size={16} />}
+          {pushRunning
+            ? '正在推送...'
+            : `开始推送代码${pushSelectedFiles.length ? ` (${pushSelectedFiles.length})` : ''}`}
+        </button>
+        <button
+          type="button"
+          className="ghost-action"
+          onClick={onInspect}
+          disabled={pushRunning || !pushTarget.trim()}
+        >
+          <RefreshCw size={14} />刷新
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function PushTaskPanel({
+  progress,
+  running,
+  elapsedSeconds,
+  cancelTask,
+  clearLogs,
+  pushWorkspace,
+  pushInspecting,
+  pushSelectedFiles,
+  setPushSelectedFiles,
+  pushFilter,
+  setPushFilter,
+  pushViewMode,
+  setPushViewMode,
+  onRefreshWorkspace,
+  onOpenFolder,
+  onViewFileDiff
+}) {
+  const terminalRef = useRef(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [onlyErrors, setOnlyErrors] = useState(false)
+
+  useEffect(() => {
+    if (autoScroll && terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    }
+  }, [progress.logs, autoScroll])
+
+  const copyAllLogs = () => {
+    const text = progress.logs.map((l) => `[${l.time}] ${l.text}`).join('\n')
+    navigator.clipboard.writeText(text)
+  }
+
+  const filteredLogs = useMemo(() => {
+    if (!onlyErrors) return progress.logs
+    return progress.logs.filter((l) => l.source === 'stderr')
+  }, [progress.logs, onlyErrors])
+
+  const allChanges = pushWorkspace?.changes || []
+  const filteredChanges = useMemo(() => {
+    if (!pushFilter.trim()) return allChanges
+    const q = pushFilter.toLowerCase().trim()
+    return allChanges.filter((c) => c.displayPath.toLowerCase().includes(q) || c.label.toLowerCase().includes(q))
+  }, [allChanges, pushFilter])
+
+  const selectedSet = useMemo(() => new Set(pushSelectedFiles), [pushSelectedFiles])
+  const allSelected = allChanges.length > 0 && pushSelectedFiles.length === allChanges.length
+  const untrackedCount = allChanges.filter((c) => c.status === 'U' || c.status === 'A').length
+
+  const toggleSelectFile = (filePath) => {
+    setPushSelectedFiles((prev) => (prev.includes(filePath) ? prev.filter((p) => p !== filePath) : [...prev, filePath]))
+  }
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setPushSelectedFiles([])
+    } else {
+      setPushSelectedFiles(allChanges.map((c) => c.path))
+    }
+  }
+
+  const statusClass =
+    progress.status === 'success' ? 'success' :
+    progress.status === 'error' ? 'error' :
+    running ? 'running' : 'idle'
+
+  const renderChangesList = (isSplit = false) => (
+    <div className={`batch-queue-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
+      <div className="batch-queue-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>变更文件清单 (<b>{allChanges.length}</b>)</span>
+          {allChanges.length > 0 && (
+            <button
+              type="button"
+              className="batch-text-btn"
+              onClick={toggleSelectAll}
+              disabled={running}
+              style={{ height: 22, padding: '0 8px' }}
+            >
+              <Check size={10} />
+              {allSelected ? '取消全选' : '全选'}
+            </button>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="input-with-icon" style={{ height: 26, padding: '0 8px', fontSize: 11 }}>
+            <Filter size={11} />
+            <input
+              placeholder="过滤文件..."
+              value={pushFilter}
+              onChange={(e) => setPushFilter(e.target.value)}
+              style={{ fontSize: 11 }}
+            />
+          </div>
+          <button
+            type="button"
+            className="batch-fetch-all-btn"
+            onClick={onRefreshWorkspace}
+            disabled={running || pushInspecting}
+          >
+            <RefreshCw size={11} className={pushInspecting ? 'spin' : ''} />
+            刷新
+          </button>
+        </div>
+      </div>
+
+      <div className="batch-queue-col-headers push-changes-col-headers">
+        <span style={{ textAlign: 'center' }}>选</span>
+        <span>状态</span>
+        <span>文件相对路径</span>
+        <span style={{ textAlign: 'right' }}>操作</span>
+      </div>
+
+      <div className="batch-queue-list">
+        {filteredChanges.length ? (
+          filteredChanges.map((item) => {
+            const checked = selectedSet.has(item.path)
+            return (
+              <div
+                key={item.path}
+                className={`batch-queue-item push-change-item ${checked ? 'selected' : ''}`}
+                onClick={() => !running && toggleSelectFile(item.path)}
+              >
+                <span className="push-check-cell">
+                  <span className={`fake-checkbox ${checked ? 'checked' : ''}`}>
+                    {checked && <Check size={10} />}
+                  </span>
+                </span>
+                <span>
+                  <span className={`push-file-badge status-${item.status}`}>
+                    <b>{item.status}</b> {item.label}
+                  </span>
+                </span>
+                <span className="batch-item-name push-file-path" title={item.displayPath}>
+                  {item.displayPath}
+                </span>
+                <div className="push-row-actions" onClick={(e) => e.stopPropagation()}>
+                  {item.staged && <span className="push-stage-tag">已暂存</span>}
+                  <button
+                    type="button"
+                    className="batch-subdir-btn"
+                    onClick={() => onViewFileDiff && onViewFileDiff(item)}
+                    title="在下方终端中查看该文件的代码差异 (Diff)"
+                  >
+                    <FileText size={10} />
+                    <span>Diff</span>
+                  </button>
+                </div>
+              </div>
+            )
+          })
+        ) : (
+          <div className="batch-queue-empty">
+            <CheckCircle2 size={18} />
+            <span>{pushWorkspace ? '工作区干净，无未提交改动' : '请先在左侧选择本地项目目录'}</span>
+            {pushWorkspace?.ahead > 0 && (
+              <small>检测到 {pushWorkspace.ahead} 个待推提交，可直接点击左侧开始推送</small>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  const renderTerminal = (isSplit = false) => (
+    <div className={`batch-terminal-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
+      <div className="terminal-window">
+        <div className="terminal-header-dots batch-terminal-header">
+          <div className="terminal-header-left">
+            <span className="terminal-dot red" />
+            <span className="terminal-dot yellow" />
+            <span className="terminal-dot green" />
+            <span className="terminal-title-label">
+              <Terminal size={12} />
+              <b>推送与 Diff 终端</b>
+            </span>
+          </div>
+          <div className="log-tools">
+            <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
+              <Filter size={10} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
+            </button>
+            <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
+              {autoScroll ? '锁定滚动' : '跟随滚动'}
+            </button>
+            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
+            <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+          </div>
+        </div>
+        <div className="terminal-output" ref={terminalRef}>
+          {filteredLogs.length ? (
+            filteredLogs.map((line, index) => (
+              <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
+                <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
+                <span>{line.text}</span>
+              </div>
+            ))
+          ) : (
+            <div className="terminal-placeholder">
+              <Terminal size={18} />
+              <span>等待推送任务或点击文件 Diff 预览</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="task-panel batch-task-panel panel">
+      <div className="panel-heading">
+        <h2>工作区变更与遥测</h2>
+        <div className="batch-view-segmented">
+          <button
+            type="button"
+            className={`batch-view-btn ${pushViewMode === 'changes' ? 'active' : ''}`}
+            onClick={() => setPushViewMode('changes')}
+          >
+            <Layers size={12} />
+            <span>变更 ({allChanges.length})</span>
+          </button>
+          <button
+            type="button"
+            className={`batch-view-btn ${pushViewMode === 'telemetry' ? 'active' : ''}`}
+            onClick={() => setPushViewMode('telemetry')}
+          >
+            <Terminal size={12} />
+            <span>终端</span>
+          </button>
+          <button
+            type="button"
+            className={`batch-view-btn ${pushViewMode === 'split' ? 'active' : ''}`}
+            onClick={() => setPushViewMode('split')}
+          >
+            <Columns2 size={12} />
+            <span>分屏</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="batch-telemetry-bar">
+        <div className="batch-telemetry-status">
+          <div className="progress-ring compact-ring">
+            <svg viewBox="0 0 42 42">
+              <circle className="ring-track" cx="21" cy="21" r="17" />
+              <circle
+                className={`ring-value ${statusClass}`}
+                cx="21"
+                cy="21"
+                r="17"
+                pathLength="100"
+                strokeDasharray={`${progress.value} 100`}
+              />
+            </svg>
+            <strong>{Math.round(progress.value)}<small>%</small></strong>
+          </div>
+          <div className="batch-telemetry-copy">
+            <b>{progress.label}</b>
+            <div className="bar-track compact-bar-track">
+              <span style={{ width: `${Math.max(0, Math.min(100, progress.value))}%` }} />
+            </div>
+          </div>
+        </div>
+        <div className="batch-stats-row">
+          <span className="batch-stats-item">变动 <b>{allChanges.length}</b></span>
+          <span className="batch-stats-item success">已选 <b>{pushSelectedFiles.length}</b></span>
+          <span className="batch-stats-item skipped">新增 <b>{untrackedCount}</b></span>
+          <span className="batch-stats-item">待推 <b>{pushWorkspace?.ahead || 0}</b></span>
+        </div>
+      </div>
+
+      <div className="batch-views-body">
+        {pushViewMode === 'changes' && renderChangesList(false)}
+        {pushViewMode === 'telemetry' && renderTerminal(false)}
+        {pushViewMode === 'split' && (
+          <div className="batch-split-layout">
+            {renderChangesList(true)}
+            {renderTerminal(true)}
+          </div>
+        )}
+      </div>
+
+      <div className="task-bottom">
+        <span><Zap size={13} />{running ? `正在推送 · ${formatDuration(elapsedSeconds)}` : '引擎就绪'}</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {progress.status === 'success' && pushWorkspace?.root && (
+            <button className="ghost-action" onClick={onOpenFolder} style={{ height: 26, padding: '0 10px', fontSize: 11 }}>
+              <FolderOpen size={12} />打开目录
+            </button>
+          )}
+          {running && (
+            <button className="stop-button" onClick={cancelTask}><Square size={13} />停止推送</button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function WorkspacePanel({
+  workspaceRoot,
+  setWorkspaceRoot,
+  onBrowseRoot,
+  onScan,
+  scanning,
+  repos,
+  filter,
+  setFilter,
+  typeFilter,
+  setTypeFilter,
+  updatingMap,
+  batchUpdating,
+  onUpdateSingle,
+  onUpdateAll,
+  onJumpToPush,
+  onJumpToSingle,
+  onOpenFolder
+}) {
+  const filteredRepos = useMemo(() => {
+    return repos.filter((r) => {
+      if (typeFilter === 'git' && r.provider !== 'git') return false
+      if (typeFilter === 'svn' && r.provider !== 'svn') return false
+      if (typeFilter === 'dirty' && !(r.changesCount > 0)) return false
+      if (typeFilter === 'ahead' && !(r.ahead > 0)) return false
+      if (!filter.trim()) return true
+      const q = filter.toLowerCase().trim()
+      return (
+        r.name.toLowerCase().includes(q) ||
+        (r.relPath && r.relPath.toLowerCase().includes(q)) ||
+        (r.branch && r.branch.toLowerCase().includes(q)) ||
+        (r.url && r.url.toLowerCase().includes(q))
+      )
+    })
+  }, [repos, filter, typeFilter])
+
+  const gitCount = repos.filter((r) => r.provider === 'git').length
+  const svnCount = repos.filter((r) => r.provider === 'svn').length
+  const dirtyCount = repos.filter((r) => r.changesCount > 0).length
+  const aheadCount = repos.filter((r) => r.ahead > 0).length
+
+  return (
+    <section className="history-layout workspace-layout">
+      <div className="history-panel workspace-panel panel">
+        <div className="workspace-top-bar">
+          <div className="workspace-root-box">
+            <div className="input-with-icon workspace-root-input">
+              <FolderOpen size={15} />
+              <input
+                value={workspaceRoot}
+                onChange={(e) => setWorkspaceRoot(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') onScan() }}
+                placeholder="选择本地工作区根目录，自动扫描旗下所有 Git / SVN 仓库 (如 D:\workspace)"
+              />
+              <button type="button" onClick={onBrowseRoot} title="浏览选择工作区根目录">
+                <FolderOpen size={15} />
+              </button>
+            </div>
+            <button
+              type="button"
+              className="ghost-action workspace-scan-btn"
+              onClick={onScan}
+              disabled={scanning || batchUpdating}
+            >
+              <RefreshCw size={14} className={scanning ? 'spin' : ''} />
+              <span>{scanning ? '扫描中...' : '扫描仓库'}</span>
+            </button>
+            <button
+              type="button"
+              className="primary-action workspace-update-all-btn"
+              onClick={() => onUpdateAll(filteredRepos)}
+              disabled={scanning || batchUpdating || !filteredRepos.length}
+            >
+              {batchUpdating ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
+              <span>{batchUpdating ? '正在批量更新...' : `一键更新全部 (${filteredRepos.length})`}</span>
+            </button>
+          </div>
+
+          <div className="workspace-filter-bar">
+            <div className="history-search-wrap" style={{ maxWidth: 320 }}>
+              <Search size={14} color="#64748b" />
+              <input
+                className="history-search-input"
+                placeholder="过滤仓库名称 / 分支 / 远程地址..."
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+              {filter && (
+                <button type="button" className="clear-filter-btn" onClick={() => setFilter('')}>
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            <div className="history-filter-pills">
+              <button
+                type="button"
+                className={`history-filter-pill ${typeFilter === 'all' ? 'active' : ''}`}
+                onClick={() => setTypeFilter('all')}
+              >
+                全部 ({repos.length})
+              </button>
+              <button
+                type="button"
+                className={`history-filter-pill ${typeFilter === 'dirty' ? 'active' : ''}`}
+                onClick={() => setTypeFilter('dirty')}
+              >
+                有改动 ({dirtyCount})
+              </button>
+              <button
+                type="button"
+                className={`history-filter-pill ${typeFilter === 'ahead' ? 'active' : ''}`}
+                onClick={() => setTypeFilter('ahead')}
+              >
+                待推送 ({aheadCount})
+              </button>
+              <button
+                type="button"
+                className={`history-filter-pill ${typeFilter === 'git' ? 'active' : ''}`}
+                onClick={() => setTypeFilter('git')}
+              >
+                <GitBranch size={11} /> Git ({gitCount})
+              </button>
+              <button
+                type="button"
+                className={`history-filter-pill ${typeFilter === 'svn' ? 'active' : ''}`}
+                onClick={() => setTypeFilter('svn')}
+              >
+                <Server size={11} /> SVN ({svnCount})
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="history-table-container workspace-table-container">
+          <div className="history-table-header workspace-table-header">
+            <span>#</span>
+            <span>引擎</span>
+            <span>仓库名称</span>
+            <span>当前分支 / 修订</span>
+            <span>工作区状态</span>
+            <span>远程仓库地址</span>
+            <span>本地路径</span>
+            <span style={{ textAlign: 'center' }}>快捷操作</span>
+          </div>
+
+          <div className="history-table-body">
+            {scanning ? (
+              <div className="history-empty">
+                <LoaderCircle size={32} className="spin" />
+                <h3>正在扫描本地工作区仓库...</h3>
+              </div>
+            ) : filteredRepos.length ? (
+              filteredRepos.map((item, idx) => {
+                const upState = updatingMap[item.target]
+                const isUpdating = upState?.status === 'running'
+                return (
+                  <div className="history-table-row workspace-table-row" key={item.target}>
+                    <span className="history-col-index">#{idx + 1}</span>
+                    <span>
+                      <span className={`provider-badge ${item.provider}`}>
+                        <span>{item.provider === 'git' ? 'G' : 'S'}</span>
+                        {item.provider.toUpperCase()}
+                      </span>
+                    </span>
+                    <span className="workspace-col-name" title={item.name}>
+                      <b>{item.name}</b>
+                    </span>
+                    <span>
+                      <span className="history-version-badge">
+                        <GitBranch size={11} />
+                        {item.branch || 'HEAD'}
+                      </span>
+                    </span>
+                    <div className="workspace-col-status">
+                      {item.changesCount > 0 ? (
+                        <span className="workspace-status-pill dirty" title={`${item.changesCount} 个文件存在未提交改动`}>
+                          {item.changesCount} 项改动
+                        </span>
+                      ) : (
+                        <span className="workspace-status-pill clean">干净</span>
+                      )}
+                      {item.ahead > 0 && (
+                        <span className="workspace-status-pill ahead" title={`${item.ahead} 个本地提交待推送`}>
+                          ↑{item.ahead} 待推
+                        </span>
+                      )}
+                      {item.behind > 0 && (
+                        <span className="workspace-status-pill behind" title={`落后远程 ${item.behind} 个提交`}>
+                          ↓{item.behind} 落后
+                        </span>
+                      )}
+                      {upState?.status === 'success' && (
+                        <span className="workspace-status-pill synced">已更新</span>
+                      )}
+                      {upState?.status === 'error' && (
+                        <span className="workspace-status-pill dirty" title={upState.message}>失败</span>
+                      )}
+                    </div>
+                    <span className="history-col-url" title={item.url || '未配置远程地址'}>
+                      {item.url || '-'}
+                    </span>
+                    <span
+                      className="history-col-path"
+                      onClick={() => onOpenFolder(item.target)}
+                      title={`点击打开目录: ${item.target}`}
+                    >
+                      {item.target}
+                    </span>
+                    <div className="history-col-actions workspace-col-actions">
+                      <button
+                        type="button"
+                        className="workspace-action-btn"
+                        onClick={() => onUpdateSingle(item)}
+                        disabled={isUpdating || batchUpdating}
+                        title="立即拉取更新该仓库"
+                      >
+                        {isUpdating ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}
+                        <span>更新</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="workspace-action-btn push"
+                        onClick={() => onJumpToPush(item)}
+                        title="在【代码推送】中打开该仓库"
+                      >
+                        <Upload size={12} />
+                        <span>推送</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="history-action-btn"
+                        onClick={() => onJumpToSingle(item)}
+                        title="在【单仓同步】中载入该仓库"
+                      >
+                        <ArrowUpRight size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="history-action-btn"
+                        onClick={() => onOpenFolder(item.target)}
+                        title="在资源管理器中打开文件夹"
+                      >
+                        <FolderOpen size={13} />
+                      </button>
+                    </div>
+                  </div>
+                )
+              })
+            ) : (
+              <div className="history-empty">
+                <FolderOpen size={34} />
+                <h3>{repos.length ? '未找到符合过滤条件的仓库' : '选择工作区根目录即可一键盘点所有本地仓库'}</h3>
+                <p>自动识别目录下所有 Git 与 SVN 仓库的分支、未提交改动数与待推送状态，支持一键批量更新或直达推送。</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
   )
 }
 function CredentialDialog({ tab, setTab, status, form, saving, testing, testMessage, onChange, onBrowseKey, onSave, onTest, onClear, onClose }) {
@@ -2809,8 +4534,7 @@ function RepoSummary({ repo, provider }) {
       <div className={`repo-provider ${provider}`}>
         <span>{provider === 'git' ? 'G' : 'S'}</span>
         <div>
-          <b>{provider === 'git' ? 'Git 远程仓库' : 'SVN 远程仓库'}</b>
-          <small>元数据读取成功</small>
+          <b>{provider === 'git' ? 'Git 仓库' : 'SVN 仓库'}</b>
         </div>
       </div>
       <div className="repo-facts">
@@ -2822,9 +4546,9 @@ function RepoSummary({ repo, provider }) {
           </>
         ) : (
           <>
-            <span><GitCommitHorizontal size={12} /><b>r{repo.latestRevision || 'HEAD'}</b> 最新修订</span>
-            <span><Server size={12} /><b>{repo.directories?.length || 0}</b> 个目录</span>
-            <span><strong>{repo.revisions?.length || 0}</strong> 条提交记录</span>
+            <span><GitCommitHorizontal size={12} /><b>r{repo.latestRevision || 'HEAD'}</b> 最新</span>
+            <span><Server size={12} /><b>{repo.directories?.length || 0}</b> 目录</span>
+            <span><strong>{repo.revisions?.length || 0}</strong> 提交</span>
           </>
         )}
       </div>
@@ -2854,9 +4578,9 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
   }, [progress.logs, onlyErrors])
 
   const statusLabel =
-    progress.status === 'success' ? '任务完成' :
-    progress.status === 'error' ? '任务失败' :
-    running ? '正在执行' : '等待任务'
+    progress.status === 'success' ? '已完成' :
+    progress.status === 'error' ? '执行失败' :
+    running ? '执行中' : '就绪'
 
   const statusClass =
     progress.status === 'success' ? 'success' :
@@ -2866,10 +4590,7 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
   return (
     <div className="task-panel panel">
       <div className="panel-heading">
-        <div>
-          <p className="section-kicker">// STEP 02 TELEMETRY & CONSOLE</p>
-          <h2>实时任务遥测</h2>
-        </div>
+        <h2>实时遥测与终端</h2>
         <span className={`status-pill ${statusClass}`}><i />{statusLabel}</span>
       </div>
       <div className="progress-overview">
@@ -2882,20 +4603,20 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
         </div>
         <div className="progress-copy">
           <b>{progress.label}</b>
-          <span>{running ? `正在通过系统进程执行 · 已耗时 ${formatDuration(elapsedSeconds)}` : progress.status === 'success' ? '工作副本已就绪，可随时使用' : '命令行输出实时滚动显示在下方'}</span>
+          <span>{running ? `已耗时 ${formatDuration(elapsedSeconds)}` : progress.status === 'success' ? '代码同步已完成' : '终端实时输出'}</span>
         </div>
       </div>
       <div className="bar-track"><span style={{ width: `${Math.max(0, Math.min(100, progress.value))}%` }} /></div>
       <div className="log-heading">
-        <span><Terminal size={13} />命令终端输出</span>
+        <span><Terminal size={13} />终端输出</span>
         <div className="log-tools">
           <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
-            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部输出' : '仅看错误'}
+            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
           </button>
           <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
             {autoScroll ? '锁定滚动' : '跟随滚动'}
           </button>
-          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制日志</button>
+          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
           <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
         </div>
       </div>
@@ -2904,7 +4625,6 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
           <span className="terminal-dot red" />
           <span className="terminal-dot yellow" />
           <span className="terminal-dot green" />
-          <span style={{ fontSize: '10.5px', color: '#64748b', marginLeft: '6px', fontFamily: 'var(--font-mono)' }}>console@codesync ~ telemetry</span>
         </div>
         <div className="terminal-output" ref={terminalRef}>
           {filteredLogs.length ? (
@@ -2917,26 +4637,21 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
           ) : (
             <div className="terminal-placeholder">
               <Terminal size={22} />
-              <span>等待任务启动...</span>
-              <small>Git 和 SVN 的详细命令行输出会在此实时滚动呈现</small>
+              <span>等待任务启动</span>
             </div>
           )}
         </div>
       </div>
       <div className="task-bottom">
-        <span><Zap size={13} />CLI 通道已连接</span>
+        <span><Zap size={13} />{running ? `执行中 · ${formatDuration(elapsedSeconds)}` : '引擎就绪'}</span>
         <div style={{ display: 'flex', gap: 8 }}>
           {progress.status === 'success' && targetPath && (
-            <button className="ghost-action" onClick={onOpenPath} style={{ height: 32, padding: '0 12px', fontSize: 12 }}>
-              <FolderOpen size={13} />打开工作目录
+            <button className="ghost-action" onClick={onOpenPath} style={{ height: 30, padding: '0 12px', fontSize: 12 }}>
+              <FolderOpen size={13} />打开目录
             </button>
           )}
-          {running ? (
+          {running && (
             <button className="stop-button" onClick={cancelTask}><Square size={13} />停止任务</button>
-          ) : (
-            <span style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Play size={11} />执行期间请保持应用窗口开启
-            </span>
           )}
         </div>
       </div>

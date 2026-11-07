@@ -29,7 +29,7 @@ function main() {
   fs.renameSync(path.join(portableApp, 'electron.exe'), path.join(portableApp, 'CodeSync Studio.exe'))
 
   const builder = path.join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js')
-  const packageResult = spawnSync(process.execPath, [builder, '--prepackaged', portableApp, '--win', 'nsis', '--config.directories.output=release-installer-codesync'], { cwd: root, stdio: 'inherit' })
+  const packageResult = spawnSync(process.execPath, [builder, '--prepackaged', portableApp, '--win', 'nsis', 'portable', '--config.directories.output=release-installer-codesync'], { cwd: root, stdio: 'inherit' })
   if (packageResult.status !== 0) process.exit(packageResult.status || 1)
   console.log(`Portable app: ${portableApp}`)
   console.log(`Installer: ${installerOutput}`)
