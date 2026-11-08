@@ -28,9 +28,12 @@ import {
   ListOrdered,
   LoaderCircle,
   LockKeyhole,
+  Package,
   Pause,
   Play,
+  Plus,
   RefreshCw,
+  Rocket,
   RotateCcw,
   Save,
   Search,
@@ -39,6 +42,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Square,
+  Tag,
   Terminal,
   Trash2,
   Upload,
@@ -61,6 +65,13 @@ function formatDuration(seconds = 0) {
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+function formatFileSize(bytes = 0) {
+  const num = Number(bytes) || 0
+  if (num < 1024) return `${num} B`
+  if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
+  return `${(num / 1024 / 1024).toFixed(2)} MB`
 }
 
 function shortHash(hash = '') {
@@ -531,6 +542,43 @@ function App() {
   const [workspaceBatchUpdating, setWorkspaceBatchUpdating] = useState(false)
   const workspaceRunningRef = useRef(false)
 
+  // 版本发布状态 (mode === 'release')
+  const [releaseTarget, setReleaseTarget] = useState(() => localStorage.getItem('code-sync-release-target') || localStorage.getItem('code-sync-push-target') || '')
+  const [releaseRemoteUrl, setReleaseRemoteUrl] = useState(() => localStorage.getItem('code-sync-release-remote') || '')
+  const [releaseTag, setReleaseTag] = useState('v1.4.0')
+  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.0')
+  const [releaseBranch, setReleaseBranch] = useState('main')
+  const [releaseNotes, setReleaseNotes] = useState('')
+  const [releaseToken, setReleaseToken] = useState('')
+  const [releasePushTag, setReleasePushTag] = useState(true)
+  const [releasePrerelease, setReleasePrerelease] = useState(false)
+  const [releaseDraft, setReleaseDraft] = useState(false)
+  const [releaseWorkspace, setReleaseWorkspace] = useState(null)
+  const [releaseInspecting, setReleaseInspecting] = useState(false)
+  const [releaseAssets, setReleaseAssets] = useState([])
+  const [releaseAssetProgressMap, setReleaseAssetProgressMap] = useState({})
+  const [releaseViewMode, setReleaseViewMode] = useState('split') // 'assets' | 'telemetry' | 'split'
+  const [releaseRunning, setReleaseRunning] = useState(false)
+  const [releaseElapsed, setReleaseElapsed] = useState(0)
+  const [releasePublishedUrl, setReleasePublishedUrl] = useState('')
+  const [releaseProgress, setReleaseProgress] = useState({
+    value: 0,
+    label: '等待 Release 发布任务启动',
+    logs: [],
+    status: 'idle'
+  })
+  const releaseRunningRef = useRef(false)
+
+  const handleSetReleaseTarget = (val) => {
+    setReleaseTarget(val)
+    localStorage.setItem('code-sync-release-target', val)
+  }
+
+  const handleSetReleaseRemoteUrl = (val) => {
+    setReleaseRemoteUrl(val)
+    localStorage.setItem('code-sync-release-remote', val)
+  }
+
   const handleSetWorkspaceRoot = (val) => {
     setWorkspaceRoot(val)
     localStorage.setItem('code-sync-workspace-root', val)
@@ -649,6 +697,55 @@ function App() {
     }
     return () => { if (timer) clearInterval(timer) }
   }, [pushRunning])
+
+  // 版本发布任务计时器
+  useEffect(() => {
+    let timer = null
+    if (releaseRunning) {
+      setReleaseElapsed(0)
+      timer = setInterval(() => setReleaseElapsed((sec) => sec + 1), 1000)
+    }
+    return () => { if (timer) clearInterval(timer) }
+  }, [releaseRunning])
+
+  // 版本发布工作区自动检测
+  async function inspectReleaseWorkspaceNow(targetDir = releaseTarget, silent = false) {
+    if (!api?.inspectReleaseWorkspace || !targetDir || !targetDir.trim()) {
+      setReleaseWorkspace(null)
+      return
+    }
+    setReleaseInspecting(true)
+    try {
+      const info = await api.inspectReleaseWorkspace({ target: targetDir.trim() })
+      setReleaseWorkspace(info)
+      if (info.url) handleSetReleaseRemoteUrl(info.url)
+      if (info.branch) setReleaseBranch(info.branch)
+      if (info.suggestedTag) setReleaseTag(info.suggestedTag)
+      if (info.suggestedTitle) setReleaseTitle(info.suggestedTitle)
+      if (Array.isArray(info.discoveredAssets) && info.discoveredAssets.length > 0) {
+        setReleaseAssets(info.discoveredAssets)
+        setReleaseAssetProgressMap({})
+      }
+      if (info.recentCommits && (!releaseNotes.trim() || /^-\s*(feat|chore|fix|docs|refactor|perf|style):/m.test(releaseNotes))) {
+        setReleaseNotes(`## ${info.suggestedTitle || info.suggestedTag}\n\n### ✨ 更新内容\n${info.recentCommits}\n`)
+      }
+      if (!silent) {
+        showToast(`已载入发布配置：发现 ${info.discoveredAssets?.length || 0} 个构建产物附件`)
+      }
+    } catch (err) {
+      if (!silent) showToast(appError(err))
+    } finally {
+      setReleaseInspecting(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!api?.inspectReleaseWorkspace || !releaseTarget.trim()) return
+    const timer = setTimeout(() => {
+      inspectReleaseWorkspaceNow(releaseTarget, true)
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [releaseTarget])
 
   // 代码推送工作区自动检测
   async function inspectPushWorkspaceNow(targetDir = pushTarget, silent = false) {
@@ -925,6 +1022,40 @@ function App() {
           setPushRunning(false)
           pushRunningRef.current = false
           setPushProgress((current) => ({
+            ...current,
+            value: event.ok ? 100 : current.value,
+            label: event.label,
+            status: event.ok ? 'success' : 'error'
+          }))
+        }
+        return
+      }
+
+      if (releaseRunningRef.current) {
+        if (event.type === 'start') {
+          setReleaseRunning(true)
+          setReleaseProgress({ value: 2, label: event.label, logs: [], status: 'running' })
+        }
+        if (event.type === 'step') {
+          setReleaseProgress((current) => ({ ...current, value: Math.max(current.value, event.value || 0), label: event.label }))
+          if (event.releaseAssetProgress?.path) {
+            setReleaseAssetProgressMap((prev) => ({
+              ...prev,
+              [event.releaseAssetProgress.path]: event.releaseAssetProgress
+            }))
+          }
+        }
+        if (event.type === 'line') {
+          setReleaseProgress((current) => ({ ...current, logs: [...current.logs.slice(-399), { ...event }] }))
+        }
+        if (event.type === 'progress') {
+          setReleaseProgress((current) => ({ ...current, value: Math.max(current.value, event.value || 0), label: event.label }))
+        }
+        if (event.type === 'done') {
+          setReleaseRunning(false)
+          releaseRunningRef.current = false
+          if (event.releaseUrl) setReleasePublishedUrl(event.releaseUrl)
+          setReleaseProgress((current) => ({
             ...current,
             value: event.ok ? 100 : current.value,
             label: event.label,
@@ -1663,9 +1794,10 @@ function App() {
     setWorkspaceScanning(true)
     try {
       const res = await api.scanLocalRepos({ rootDir: cleanDir })
-      setWorkspaceRepos(res?.repos || [])
+      const list = res?.repos || res?.repositories || []
+      setWorkspaceRepos(list)
       if (!silent) {
-        showToast(`扫描完成：共发现 ${(res?.repos || []).length} 个本地仓库`)
+        showToast(`扫描完成：共发现 ${list.length} 个本地仓库`)
       }
     } catch (err) {
       if (!silent) showToast(appError(err))
@@ -1675,10 +1807,12 @@ function App() {
   }
 
   useEffect(() => {
-    if (mode === 'workspace' && workspaceRoot.trim() && workspaceRepos.length === 0 && !workspaceScanning) {
+    if (mode !== 'workspace' || !workspaceRoot.trim()) return
+    const timer = window.setTimeout(() => {
       scanWorkspaceNow(workspaceRoot, true)
-    }
-  }, [mode])
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [mode, workspaceRoot])
 
   async function browseWorkspaceRoot() {
     if (!api) return showToast('请在桌面版中使用目录选择')
@@ -1764,6 +1898,133 @@ function App() {
     if (repoItem.url) handleSetUrl(repoItem.url)
     setMode('single')
     showToast(`已载入到单仓更新：${repoItem.name}`)
+  }
+
+  function jumpToReleaseRepo(repoItem) {
+    if (!repoItem) return
+    handleSetReleaseTarget(repoItem.target)
+    if (repoItem.url) handleSetReleaseRemoteUrl(repoItem.url)
+    if (repoItem.branch) setReleaseBranch(repoItem.branch)
+    setMode('release')
+    inspectReleaseWorkspaceNow(repoItem.target, false)
+  }
+
+  async function browseReleaseTarget() {
+    if (!api) return showToast('请在桌面版中使用目录选择')
+    const selected = await api.choosePath()
+    if (selected) {
+      handleSetReleaseTarget(selected)
+      inspectReleaseWorkspaceNow(selected, false)
+    }
+  }
+
+  async function addReleaseFiles() {
+    if (!api?.chooseReleaseFiles) return showToast('请在桌面版中选择附件')
+    const files = await api.chooseReleaseFiles()
+    if (Array.isArray(files) && files.length > 0) {
+      setReleaseAssets((prev) => {
+        const seen = new Set(prev.map((a) => a.path))
+        const added = files.filter((f) => !seen.has(f.path))
+        return [...prev, ...added]
+      })
+      showToast(`已添加 ${files.length} 个发行版附件`)
+    }
+  }
+
+  function removeReleaseAsset(filePath) {
+    setReleaseAssets((prev) => prev.filter((a) => a.path !== filePath))
+  }
+
+  function updateReleaseAssetUploadName(filePath, newName) {
+    setReleaseAssets((prev) =>
+      prev.map((a) => (a.path === filePath ? { ...a, uploadName: newName } : a))
+    )
+  }
+
+  function generateReleaseChangelog() {
+    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.0'
+    const commits = releaseWorkspace?.recentCommits || '- 新增：常规功能升级与细节体验优化'
+    const assetSection = releaseAssets.length > 0
+      ? `\n### 📦 发行版附件\n${releaseAssets.map((a) => `- \`${a.uploadName || a.name}\` (${formatFileSize(a.size)})`).join('\n')}\n`
+      : ''
+    setReleaseNotes(`## ${title}\n\n### ✨ 更新内容\n${commits}\n${assetSection}`)
+    showToast('已生成中文版本更新说明')
+  }
+
+  async function runReleaseTask() {
+    if (running || batchRunning || pushRunning || releaseRunning) return
+    if (!releaseRemoteUrl.trim()) return showToast('请先填写远程 GitHub / Gitee 仓库地址')
+    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.0）')
+    if (!api) return showToast('任务执行需要在桌面版中运行')
+
+    setReleaseRunning(true)
+    releaseRunningRef.current = true
+    setReleasePublishedUrl('')
+    if (releaseViewMode === 'assets') setReleaseViewMode('split')
+    const initMap = {}
+    releaseAssets.forEach((a) => {
+      initMap[a.path] = { path: a.path, status: 'pending', percent: 0, uploadedBytes: 0, totalBytes: a.size, speed: '等待中' }
+    })
+    setReleaseAssetProgressMap(initMap)
+    setReleaseProgress({
+      value: 2,
+      label: `正在启动 Release ${releaseTag.trim()} 发布任务...`,
+      logs: [],
+      status: 'running'
+    })
+
+    try {
+      const res = await api.runTask({
+        provider: 'git',
+        action: 'release',
+        target: releaseTarget.trim(),
+        url: releaseRemoteUrl.trim(),
+        tagName: releaseTag.trim(),
+        releaseTitle: releaseTitle.trim() || releaseTag.trim(),
+        releaseNotes: releaseNotes.trim(),
+        targetCommitish: releaseBranch.trim() || 'main',
+        draft: releaseDraft,
+        prerelease: releasePrerelease,
+        pushTag: releasePushTag,
+        assets: releaseAssets,
+        token: releaseToken.trim(),
+        saveToken: true
+      })
+
+      if (res?.releaseUrl) {
+        setReleasePublishedUrl(res.releaseUrl)
+      }
+
+      const entry = {
+        id: Date.now(),
+        provider: 'git',
+        action: 'release',
+        version: `Release ${releaseTag.trim()}`,
+        target: releaseTarget.trim() || releaseRemoteUrl.trim(),
+        url: releaseRemoteUrl.trim(),
+        time: new Date().toISOString(),
+        ok: true
+      }
+      setRecent((currentRecent) => {
+        const next = [entry, ...currentRecent.filter((r) => !(r.url === entry.url && r.version === entry.version && r.action === 'release'))].slice(0, 10)
+        localStorage.setItem('code-sync-recent', JSON.stringify(next))
+        return next
+      })
+
+      showToast(`🎉 Release ${releaseTag.trim()} 已成功发布！`)
+    } catch (error) {
+      showToast(appError(error))
+    } finally {
+      setReleaseRunning(false)
+      releaseRunningRef.current = false
+    }
+  }
+
+  async function cancelReleaseTask() {
+    if (api) {
+      try { await api.cancelTask() } catch {}
+    }
+    showToast('正在停止 Release 发布与上传任务...')
   }
 
   async function runPushTask() {
@@ -1930,6 +2191,13 @@ function App() {
   }
 
   function loadRecent(entry) {
+    if (entry.action === 'release') {
+      setMode('release')
+      if (entry.target && !/^https?:\/\//i.test(entry.target)) handleSetReleaseTarget(entry.target)
+      if (entry.url) handleSetReleaseRemoteUrl(entry.url)
+      showToast(`已载入版本发布：${entry.version || ''}`)
+      return
+    }
     if (entry.action === 'push') {
       setMode('push')
       setPushProvider(entry.provider || 'git')
@@ -1999,6 +2267,14 @@ function App() {
             <span>推送</span>
           </button>
           <button
+            className={`side-nav-item ${mode === 'release' ? 'active' : ''}`}
+            onClick={() => setMode('release')}
+            title="创建并发布 GitHub / Gitee Release 发行版"
+          >
+            <Rocket size={18} />
+            <span>发布</span>
+          </button>
+          <button
             className={`side-nav-item ${mode === 'workspace' ? 'active' : ''}`}
             onClick={() => setMode('workspace')}
             title="本地多仓工作区盘点与批量更新"
@@ -2057,8 +2333,10 @@ function App() {
                 ? '批量拉取'
                 : mode === 'push'
                 ? '代码推送'
+                : mode === 'release'
+                ? '版本发布'
                 : mode === 'workspace'
-                ? '本地仓库管家'
+                ? '本地仓库'
                 : '同步记录'}
             </strong>
           </div>
@@ -2086,6 +2364,14 @@ function App() {
             >
               <Upload size={13} />
               <span>代码推送</span>
+            </button>
+            <button
+              type="button"
+              className={`mode-tab-btn ${mode === 'release' ? 'active' : ''}`}
+              onClick={() => setMode('release')}
+            >
+              <Rocket size={13} />
+              <span>版本发布</span>
             </button>
             <button
               type="button"
@@ -2203,15 +2489,6 @@ function App() {
                   <div className="field-group">
                     <div className="label-row">
                       <label className="field-title" htmlFor="target-path">本地目标目录</label>
-                      {target.trim() && (
-                        <button
-                          type="button"
-                          onClick={() => openLocalPath(target)}
-                          style={{ fontSize: 11, color: 'var(--cyan-primary)', background: 'transparent', padding: 0, display: 'flex', alignItems: 'center', gap: 3 }}
-                        >
-                          <ExternalLink size={11} />打开目录
-                        </button>
-                      )}
                     </div>
                     <div className="input-with-icon">
                       <FolderOpen size={15} />
@@ -2546,6 +2823,61 @@ function App() {
                 onViewFileDiff={handleViewFileDiff}
               />
             </section>
+          ) : mode === 'release' ? (
+            <section className="sync-layout">
+              <ReleaseSyncPanel
+                releaseTarget={releaseTarget}
+                setReleaseTarget={handleSetReleaseTarget}
+                browseReleaseTarget={browseReleaseTarget}
+                releaseRemoteUrl={releaseRemoteUrl}
+                setReleaseRemoteUrl={handleSetReleaseRemoteUrl}
+                releaseTag={releaseTag}
+                setReleaseTag={setReleaseTag}
+                releaseTitle={releaseTitle}
+                setReleaseTitle={setReleaseTitle}
+                releaseBranch={releaseBranch}
+                setReleaseBranch={setReleaseBranch}
+                releaseNotes={releaseNotes}
+                setReleaseNotes={setReleaseNotes}
+                releaseToken={releaseToken}
+                setReleaseToken={setReleaseToken}
+                releasePushTag={releasePushTag}
+                setReleasePushTag={setReleasePushTag}
+                releasePrerelease={releasePrerelease}
+                setReleasePrerelease={setReleasePrerelease}
+                releaseDraft={releaseDraft}
+                setReleaseDraft={setReleaseDraft}
+                releaseWorkspace={releaseWorkspace}
+                releaseInspecting={releaseInspecting}
+                releaseAssets={releaseAssets}
+                releaseRunning={releaseRunning}
+                releaseProgress={releaseProgress}
+                onInspect={() => inspectReleaseWorkspaceNow(releaseTarget, false)}
+                onGenerateChangelog={generateReleaseChangelog}
+                onOpenLocalPath={openLocalPath}
+                onStartRelease={runReleaseTask}
+              />
+
+              <ReleaseTaskPanel
+                progress={releaseProgress}
+                running={releaseRunning}
+                elapsedSeconds={releaseElapsed}
+                cancelTask={cancelReleaseTask}
+                clearLogs={() => setReleaseProgress((current) => ({ ...current, logs: [] }))}
+                releaseAssets={releaseAssets}
+                releaseAssetProgressMap={releaseAssetProgressMap}
+                onAddFiles={addReleaseFiles}
+                onRescanAssets={() => inspectReleaseWorkspaceNow(releaseTarget, false)}
+                onClearAssets={() => { setReleaseAssets([]); setReleaseAssetProgressMap({}) }}
+                onRemoveAsset={removeReleaseAsset}
+                onUpdateUploadName={updateReleaseAssetUploadName}
+                onOpenFolder={openLocalPath}
+                releasePublishedUrl={releasePublishedUrl}
+                onOpenExternal={(u) => api?.openExternalUrl && api.openExternalUrl(u)}
+                releaseViewMode={releaseViewMode}
+                setReleaseViewMode={setReleaseViewMode}
+              />
+            </section>
           ) : mode === 'workspace' ? (
             <WorkspacePanel
               workspaceRoot={workspaceRoot}
@@ -2563,6 +2895,7 @@ function App() {
               onUpdateSingle={updateSingleWorkspaceRepo}
               onUpdateAll={updateAllWorkspaceRepos}
               onJumpToPush={jumpToPushRepo}
+              onJumpToRelease={jumpToReleaseRepo}
               onJumpToSingle={jumpToSingleRepo}
               onOpenFolder={openLocalPath}
             />
@@ -2650,7 +2983,7 @@ function App() {
                           </span>
                           <span>
                             <span className={`action-pill ${entry.action}`}>
-                              {entry.action === 'pull' ? '克隆' : entry.action === 'push' ? '推送' : '更新'}
+                              {entry.action === 'pull' ? '克隆' : entry.action === 'push' ? '推送' : entry.action === 'release' ? '发布' : '更新'}
                             </span>
                           </span>
                           <span className="history-col-url" title={entry.url || '未记录地址'}>
@@ -3517,15 +3850,6 @@ function PushSyncPanel({
         <div className="field-group">
           <div className="label-row">
             <label className="field-title" htmlFor="push-target-input">本地项目目录</label>
-            {pushWorkspace?.root && (
-              <button
-                type="button"
-                onClick={() => onOpenLocalPath(pushWorkspace.root)}
-                style={{ color: 'var(--cyan-primary)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', background: 'transparent', padding: 0 }}
-              >
-                <ExternalLink size={11} />打开目录
-              </button>
-            )}
           </div>
           <div className="input-with-icon">
             <FolderOpen size={15} />
@@ -3597,18 +3921,6 @@ function PushSyncPanel({
             <div className="field-group" style={{ marginTop: 0 }}>
               <div className="label-row">
                 <label className="field-title" htmlFor="push-branch-input">推送分支</label>
-                {pushWorkspace?.branches?.length > 1 && (
-                  <select
-                    className="push-branch-quick-select"
-                    value={pushBranch}
-                    onChange={(e) => setPushBranch(e.target.value)}
-                    disabled={pushRunning}
-                  >
-                    {pushWorkspace.branches.map((b) => (
-                      <option key={b} value={b}>{b}</option>
-                    ))}
-                  </select>
-                )}
               </div>
               <div className="input-with-icon">
                 <GitBranch size={14} />
@@ -3619,6 +3931,23 @@ function PushSyncPanel({
                   disabled={pushRunning}
                   placeholder="main / master / dev"
                 />
+                {pushWorkspace?.branches?.length > 0 && (
+                  <div className="inline-branch-picker" title="点击切换本地已有分支">
+                    <ChevronDown size={13} />
+                    <select
+                      value={pushWorkspace.branches.includes(pushBranch) ? pushBranch : ''}
+                      onChange={(e) => { if (e.target.value) setPushBranch(e.target.value) }}
+                      disabled={pushRunning}
+                    >
+                      {!pushWorkspace.branches.includes(pushBranch) && (
+                        <option value="">{pushBranch || '选择分支'}</option>
+                      )}
+                      {pushWorkspace.branches.map((b) => (
+                        <option key={b} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -4049,6 +4378,7 @@ function WorkspacePanel({
   onUpdateSingle,
   onUpdateAll,
   onJumpToPush,
+  onJumpToRelease,
   onJumpToSingle,
   onOpenFolder
 }) {
@@ -4262,6 +4592,17 @@ function WorkspacePanel({
                         <Upload size={12} />
                         <span>推送</span>
                       </button>
+                      {item.provider === 'git' && onJumpToRelease && (
+                        <button
+                          type="button"
+                          className="workspace-action-btn release"
+                          onClick={() => onJumpToRelease(item)}
+                          title="在【版本发布】中为此仓库发布 Release"
+                        >
+                          <Rocket size={12} />
+                          <span>发布</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="history-action-btn"
@@ -4652,6 +4993,593 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
           )}
           {running && (
             <button className="stop-button" onClick={cancelTask}><Square size={13} />停止任务</button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReleaseSyncPanel({
+  releaseTarget,
+  setReleaseTarget,
+  browseReleaseTarget,
+  releaseRemoteUrl,
+  setReleaseRemoteUrl,
+  releaseTag,
+  setReleaseTag,
+  releaseTitle,
+  setReleaseTitle,
+  releaseBranch,
+  setReleaseBranch,
+  releaseNotes,
+  setReleaseNotes,
+  releaseToken,
+  setReleaseToken,
+  releasePushTag,
+  setReleasePushTag,
+  releasePrerelease,
+  setReleasePrerelease,
+  releaseDraft,
+  setReleaseDraft,
+  releaseWorkspace,
+  releaseInspecting,
+  releaseAssets,
+  releaseRunning,
+  releaseProgress,
+  onInspect,
+  onGenerateChangelog,
+  onOpenLocalPath,
+  onStartRelease
+}) {
+  const platformName = releaseWorkspace?.parsedRepo?.platform === 'gitee' ? 'Gitee' : 'GitHub'
+  const repoLabel = releaseWorkspace?.parsedRepo
+    ? `${releaseWorkspace.parsedRepo.owner}/${releaseWorkspace.parsedRepo.repo}`
+    : ''
+
+  return (
+    <div className="sync-panel panel">
+      <div className="panel-heading">
+        <h2>版本发布</h2>
+        <span className="secure-label"><Rocket size={12} /> {platformName}</span>
+      </div>
+
+      <div className="sync-panel-content batch-panel-content">
+        <div className="field-group">
+          <div className="label-row">
+            <label className="field-title">本地项目目录</label>
+            {releaseWorkspace?.branch && <span>当前分支: <b>{releaseWorkspace.branch}</b></span>}
+          </div>
+          <div className="input-with-icon">
+            <FolderOpen size={15} />
+            <input
+              value={releaseTarget}
+              onChange={(e) => setReleaseTarget(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') onInspect() }}
+              placeholder="D:\workspace\project-name"
+              disabled={releaseRunning}
+            />
+            <button type="button" onClick={browseReleaseTarget} title="选择本地项目目录" disabled={releaseRunning}>
+              <FolderOpen size={14} />
+            </button>
+            <button
+              type="button"
+              className={releaseInspecting ? 'loading-button' : ''}
+              onClick={onInspect}
+              title="重新读取版本与打包产物"
+              disabled={releaseRunning || releaseInspecting || !releaseTarget.trim()}
+            >
+              <RefreshCw size={14} className={releaseInspecting ? 'spin' : ''} />
+            </button>
+          </div>
+        </div>
+
+        <div className="field-group">
+          <div className="label-row">
+            <label className="field-title">远程仓库地址</label>
+            {repoLabel && <span style={{ color: 'var(--cyan-primary)' }}>{repoLabel}</span>}
+          </div>
+          <div className="input-with-icon">
+            <Upload size={15} />
+            <input
+              value={releaseRemoteUrl}
+              onChange={(e) => setReleaseRemoteUrl(e.target.value)}
+              placeholder="https://github.com/owner/repo.git"
+              disabled={releaseRunning}
+            />
+          </div>
+        </div>
+
+        <div className="release-meta-grid">
+          <div className="field-group" style={{ marginTop: 0 }}>
+            <div className="label-row">
+              <label className="field-title">版本标签</label>
+            </div>
+            <div className="input-with-icon">
+              <Tag size={14} />
+              <input
+                value={releaseTag}
+                onChange={(e) => setReleaseTag(e.target.value)}
+                placeholder="v1.4.0"
+                disabled={releaseRunning}
+              />
+            </div>
+          </div>
+
+          <div className="field-group" style={{ marginTop: 0 }}>
+            <div className="label-row">
+              <label className="field-title">目标分支</label>
+            </div>
+            <div className="input-with-icon">
+              <GitBranch size={14} />
+              <input
+                value={releaseBranch}
+                onChange={(e) => setReleaseBranch(e.target.value)}
+                placeholder="main"
+                disabled={releaseRunning}
+              />
+              {releaseWorkspace?.branches?.length > 0 && (
+                <div className="inline-branch-picker" title="点击切换本地已有分支">
+                  <ChevronDown size={13} />
+                  <select
+                    value={releaseWorkspace.branches.includes(releaseBranch) ? releaseBranch : ''}
+                    onChange={(e) => { if (e.target.value) setReleaseBranch(e.target.value) }}
+                    disabled={releaseRunning}
+                  >
+                    {!releaseWorkspace.branches.includes(releaseBranch) && (
+                      <option value="">{releaseBranch || '选择分支'}</option>
+                    )}
+                    {releaseWorkspace.branches.map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="field-group" style={{ marginTop: 0 }}>
+            <div className="label-row">
+              <label className="field-title">发布标题</label>
+            </div>
+            <div className="input-with-icon">
+              <Rocket size={14} />
+              <input
+                value={releaseTitle}
+                onChange={(e) => setReleaseTitle(e.target.value)}
+                placeholder="Release 标题"
+                disabled={releaseRunning}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="batch-options-grid">
+          <div className="field-group" style={{ marginTop: 0 }}>
+            <div className="label-row">
+              <label className="field-title">访问令牌</label>
+              {releaseWorkspace?.tokenConfigured && <span style={{ color: 'var(--emerald-text)' }}>已存加密凭据</span>}
+            </div>
+            <div className="input-with-icon">
+              <KeyRound size={14} />
+              <input
+                type="password"
+                value={releaseToken}
+                onChange={(e) => setReleaseToken(e.target.value)}
+                placeholder={releaseWorkspace?.tokenConfigured ? '默认使用已存 Token' : 'GitHub / Gitee Token'}
+                disabled={releaseRunning}
+              />
+            </div>
+          </div>
+
+          <div className="field-group" style={{ marginTop: 0 }}>
+            <div className="label-row">
+              <label className="field-title">发布选项</label>
+            </div>
+            <div className="push-strategy-pills">
+              <button
+                type="button"
+                className={`push-strategy-pill ${releasePushTag ? 'active' : ''}`}
+                onClick={() => setReleasePushTag(!releasePushTag)}
+                disabled={releaseRunning}
+                title="发布前自动在本地创建并向远程推送该 Git Tag"
+              >
+                <Tag size={11} />推送标签
+              </button>
+              <button
+                type="button"
+                className={`push-strategy-pill ${releasePrerelease ? 'active' : ''}`}
+                onClick={() => setReleasePrerelease(!releasePrerelease)}
+                disabled={releaseRunning}
+                title="标记为预发布版本 (Pre-release)"
+              >
+                <Sparkles size={11} />预发布
+              </button>
+              <button
+                type="button"
+                className={`push-strategy-pill ${releaseDraft ? 'active' : ''}`}
+                onClick={() => setReleaseDraft(!releaseDraft)}
+                disabled={releaseRunning}
+                title="保存为草稿 (Draft) 而不立即公开"
+              >
+                <FileText size={11} />草稿
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="field-group batch-urls-group">
+          <div className="label-row">
+            <label className="field-title">更新说明</label>
+            <span>支持 Markdown</span>
+          </div>
+          <div className="batch-textarea-wrap">
+            <textarea
+              className="batch-textarea"
+              value={releaseNotes}
+              onChange={(e) => setReleaseNotes(e.target.value)}
+              placeholder="输入本次版本更新内容..."
+              disabled={releaseRunning}
+            />
+          </div>
+          <div className="batch-textarea-toolbar">
+            <div className="batch-textarea-actions">
+              <button
+                type="button"
+                className="batch-text-btn"
+                onClick={onGenerateChangelog}
+                disabled={releaseRunning}
+              >
+                <Sparkles size={11} />自动生成
+              </button>
+              <button
+                type="button"
+                className="batch-text-btn"
+                onClick={() => setReleaseNotes((prev) => `${prev ? prev + '\n' : ''}### 🚀 新增特性\n- \n\n### 🛠️ 问题修复\n- \n`)}
+                disabled={releaseRunning}
+              >
+                + 章节模板
+              </button>
+            </div>
+            <button
+              type="button"
+              className="batch-text-btn"
+              onClick={() => setReleaseNotes('')}
+              disabled={releaseRunning || !releaseNotes}
+              style={{ color: 'var(--crimson-text)' }}
+            >
+              <Trash2 size={11} />清空
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel-actions">
+        <button className="primary-action" onClick={onStartRelease} disabled={releaseRunning || !releaseTarget.trim()}>
+          {releaseRunning ? <LoaderCircle size={16} className="spin" /> : <Rocket size={16} />}
+          {releaseRunning ? `正在发布 (${Math.round(releaseProgress.value || 0)}%)...` : `开始发布 ${releaseTag || 'Release'}`}
+        </button>
+        <button
+          type="button"
+          className="ghost-action"
+          onClick={() => {
+            setReleaseNotes('')
+            setReleaseToken('')
+            setReleasePrerelease(false)
+            setReleaseDraft(false)
+            setReleasePushTag(true)
+            if (releaseTarget.trim()) onInspect()
+          }}
+          disabled={releaseRunning}
+        >
+          <X size={14} />重置
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ReleaseTaskPanel({
+  progress,
+  running,
+  elapsedSeconds,
+  cancelTask,
+  clearLogs,
+  releaseAssets,
+  releaseAssetProgressMap,
+  onAddFiles,
+  onRescanAssets,
+  onClearAssets,
+  onRemoveAsset,
+  onUpdateUploadName,
+  onOpenFolder,
+  releasePublishedUrl,
+  onOpenExternal,
+  releaseViewMode,
+  setReleaseViewMode
+}) {
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [onlyErrors, setOnlyErrors] = useState(false)
+  const terminalRef = useRef(null)
+
+  const filteredLogs = useMemo(() => {
+    if (!onlyErrors) return progress.logs
+    return progress.logs.filter((line) => line.source === 'stderr' || /error|fail|fatal|失败|错误|拒绝/i.test(line.text))
+  }, [progress.logs, onlyErrors])
+
+  useEffect(() => {
+    if (autoScroll && terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    }
+  }, [filteredLogs.length, autoScroll])
+
+  const statusClass =
+    progress.status === 'success' ? 'success' :
+    progress.status === 'error' ? 'error' :
+    running ? 'running' : 'idle'
+
+  const totalBytes = releaseAssets.reduce((acc, a) => acc + (Number(a.size) || 0), 0)
+  const doneAssetsCount = releaseAssets.filter((a) => releaseAssetProgressMap[a.path]?.status === 'done').length
+
+  function copyAllLogs() {
+    if (!progress.logs.length) return
+    const content = progress.logs
+      .map((l) => `[${new Date(l.time).toLocaleTimeString('zh-CN', { hour12: false })}] ${l.text}`)
+      .join('\n')
+    navigator.clipboard?.writeText(content)
+  }
+
+  const renderAssetsTable = (isSplit = false) => (
+    <div className={`batch-queue-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
+      <div className="batch-queue-header">
+        <span>发行版附件 (<b>{releaseAssets.length}</b>)</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            className="batch-fetch-all-btn"
+            onClick={onAddFiles}
+            disabled={running}
+            title="从本地选择要上传到 Release 的安装包或压缩包"
+          >
+            <Plus size={11} />
+            添加附件
+          </button>
+          <button
+            type="button"
+            className="batch-text-btn"
+            onClick={onRescanAssets}
+            disabled={running}
+            style={{ height: 24, padding: '0 8px' }}
+            title="自动扫描项目目录下的打包产物"
+          >
+            <RefreshCw size={11} />
+            扫描产物
+          </button>
+          {releaseAssets.length > 0 && (
+            <button
+              type="button"
+              className="batch-text-btn"
+              onClick={onClearAssets}
+              disabled={running}
+              style={{ height: 24, padding: '0 8px', color: 'var(--crimson-text)' }}
+              title="清空附件列表"
+            >
+              <Trash2 size={11} />
+              清空
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="batch-queue-col-headers release-assets-col-headers">
+        <span>#</span>
+        <span>附件名称</span>
+        <span>大小</span>
+        <span>上传进度</span>
+        <span style={{ textAlign: 'right' }}>操作</span>
+      </div>
+
+      <div className="batch-queue-list">
+        {releaseAssets.length > 0 ? (
+          releaseAssets.map((item, idx) => {
+            const p = releaseAssetProgressMap[item.path]
+            const st = p?.status || 'idle'
+            const pct = p?.percent ?? 0
+            return (
+              <div className={`batch-queue-item release-asset-item ${st}`} key={item.path}>
+                <span className="batch-item-index">#{idx + 1}</span>
+                <div style={{ minWidth: 0 }}>
+                  <input
+                    className="release-asset-name-input"
+                    value={item.uploadName || item.name}
+                    onChange={(e) => onUpdateUploadName(item.path, e.target.value)}
+                    disabled={running}
+                    title={`本地路径: ${item.path}`}
+                  />
+                </div>
+                <span className="release-col-size">{formatFileSize(item.size)}</span>
+                <div className="release-col-progress">
+                  <div className="release-asset-bar">
+                    <span
+                      className={`release-asset-bar-fill ${st}`}
+                      style={{ width: `${st === 'done' ? 100 : pct}%` }}
+                    />
+                  </div>
+                  <span className={`release-asset-status-text ${st}`}>
+                    {st === 'uploading'
+                      ? `${pct}%${p?.speed ? ` · ${p.speed}` : ''}`
+                      : st === 'done'
+                      ? '已完成'
+                      : st === 'error'
+                      ? '失败'
+                      : st === 'pending'
+                      ? '等待中'
+                      : '待上传'}
+                  </span>
+                </div>
+                <div className="batch-item-actions">
+                  <button
+                    type="button"
+                    className="batch-icon-action"
+                    onClick={() => onOpenFolder(item.path)}
+                    title="打开所在目录"
+                  >
+                    <FolderOpen size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className="batch-icon-action danger"
+                    onClick={() => onRemoveAsset(item.path)}
+                    disabled={running}
+                    title="移除此附件"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+            )
+          })
+        ) : (
+          <div className="batch-queue-empty">
+            <Package size={18} />
+            <span>暂未添加附件</span>
+            <small>点击右上角「添加附件」或「扫描产物」载入安装包</small>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  const renderTerminal = (isSplit = false) => (
+    <div className={`batch-terminal-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
+      <div className="terminal-window">
+        <div className="terminal-header-dots batch-terminal-header">
+          <div className="terminal-header-left">
+            <span className="terminal-dot red" />
+            <span className="terminal-dot yellow" />
+            <span className="terminal-dot green" />
+            <span className="terminal-title-label">
+              <Terminal size={12} />
+              <b>发布终端</b>
+            </span>
+          </div>
+          <div className="log-tools">
+            <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
+              <Filter size={10} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
+            </button>
+            <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
+              {autoScroll ? '锁定滚动' : '跟随滚动'}
+            </button>
+            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
+            <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
+          </div>
+        </div>
+        <div className="terminal-output" ref={terminalRef}>
+          {filteredLogs.length ? (
+            filteredLogs.map((line, index) => (
+              <div className={`log-line ${line.source}`} key={`${line.time}-${index}`}>
+                <time>{new Date(line.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
+                <span>{line.text}</span>
+              </div>
+            ))
+          ) : (
+            <div className="terminal-placeholder">
+              <Terminal size={18} />
+              <span>等待发布任务启动</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="task-panel batch-task-panel panel">
+      <div className="panel-heading">
+        <h2>发布进度与附件</h2>
+        <div className="batch-view-segmented">
+          <button
+            type="button"
+            className={`batch-view-btn ${releaseViewMode === 'assets' ? 'active' : ''}`}
+            onClick={() => setReleaseViewMode('assets')}
+          >
+            <Package size={12} />
+            <span>附件 ({releaseAssets.length})</span>
+          </button>
+          <button
+            type="button"
+            className={`batch-view-btn ${releaseViewMode === 'telemetry' ? 'active' : ''}`}
+            onClick={() => setReleaseViewMode('telemetry')}
+          >
+            <Terminal size={12} />
+            <span>终端</span>
+          </button>
+          <button
+            type="button"
+            className={`batch-view-btn ${releaseViewMode === 'split' ? 'active' : ''}`}
+            onClick={() => setReleaseViewMode('split')}
+          >
+            <Columns2 size={12} />
+            <span>分屏</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="batch-telemetry-bar">
+        <div className="batch-telemetry-status">
+          <div className="progress-ring compact-ring">
+            <svg viewBox="0 0 42 42">
+              <circle className="ring-track" cx="21" cy="21" r="17" />
+              <circle
+                className={`ring-value ${statusClass}`}
+                cx="21"
+                cy="21"
+                r="17"
+                pathLength="100"
+                strokeDasharray={`${Math.max(0, Math.min(100, progress.value || 0))} 100`}
+              />
+            </svg>
+            <strong>{Math.round(progress.value || 0)}<small>%</small></strong>
+          </div>
+          <div className="batch-telemetry-copy">
+            <b>{progress.label}</b>
+            <div className="bar-track compact-bar-track">
+              <span style={{ width: `${Math.max(0, Math.min(100, progress.value || 0))}%` }} />
+            </div>
+          </div>
+        </div>
+        <div className="batch-stats-row">
+          <span className="batch-stats-item">附件 <b>{releaseAssets.length}</b></span>
+          <span className="batch-stats-item success">已传 <b>{doneAssetsCount}</b></span>
+          <span className="batch-stats-item">体积 <b>{formatFileSize(totalBytes)}</b></span>
+        </div>
+      </div>
+
+      <div className="batch-views-body">
+        {releaseViewMode === 'assets' && renderAssetsTable(false)}
+        {releaseViewMode === 'telemetry' && renderTerminal(false)}
+        {releaseViewMode === 'split' && (
+          <div className="batch-split-layout">
+            {renderAssetsTable(true)}
+            {renderTerminal(true)}
+          </div>
+        )}
+      </div>
+
+      <div className="task-bottom">
+        <span><Zap size={13} />{running ? `正在发布 · ${formatDuration(elapsedSeconds)}` : '引擎就绪'}</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {releasePublishedUrl && (
+            <button
+              className="ghost-action"
+              onClick={() => onOpenExternal(releasePublishedUrl)}
+              style={{ height: 26, padding: '0 10px', fontSize: 11, color: 'var(--cyan-primary)', borderColor: 'rgba(0, 240, 255, 0.35)' }}
+            >
+              <ExternalLink size={12} />查看 Release
+            </button>
+          )}
+          {running && (
+            <button className="stop-button" onClick={cancelTask}><Square size={13} />停止发布</button>
           )}
         </div>
       </div>

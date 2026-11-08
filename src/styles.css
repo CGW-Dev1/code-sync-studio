@@ -466,6 +466,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: relative;
   z-index: 20;
   flex-shrink: 0;
 }
@@ -507,6 +508,9 @@ button:disabled {
 
 /* Central Segmented Mode Switcher */
 .mode-segmented {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   background: rgba(6, 11, 22, 0.9);
   border: 1px solid var(--border-card);
@@ -519,17 +523,19 @@ button:disabled {
 .mode-tab-btn {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 16px;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 13px;
   border-radius: var(--radius-full);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-secondary);
   background: transparent;
   border: 1px solid transparent;
   cursor: pointer;
   outline: none;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+  transition: color 0.2s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .mode-tab-btn:hover {
@@ -2970,19 +2976,37 @@ button:disabled {
   padding: 6px 10px;
 }
 
-.push-branch-quick-select {
-  background: rgba(0, 240, 255, 0.1);
-  border: 1px solid rgba(0, 240, 255, 0.3);
+.inline-branch-picker {
+  position: relative;
+  width: 24px;
+  height: 24px;
   border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.inline-branch-picker:hover {
   color: var(--cyan-primary);
-  font-size: 10.5px;
-  font-family: var(--font-mono);
-  padding: 1px 6px;
-  outline: none;
+  border-color: rgba(0, 240, 255, 0.4);
+  background: rgba(0, 240, 255, 0.1);
+}
+
+.inline-branch-picker select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
   cursor: pointer;
 }
 
-.push-branch-quick-select option {
+.inline-branch-picker select option {
   background: #0b1324;
   color: var(--text-primary);
 }
@@ -3163,7 +3187,7 @@ button:disabled {
 
 .workspace-table-header,
 .workspace-table-row {
-  grid-template-columns: 36px 65px 1.05fr 0.9fr 1.15fr 1.3fr 1.25fr 176px;
+  grid-template-columns: 34px 62px 1fr 0.85fr 1.05fr 1.2fr 1.1fr 248px;
 }
 
 .workspace-col-name {
@@ -3215,20 +3239,33 @@ button:disabled {
 }
 
 .workspace-col-actions {
-  gap: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: nowrap;
+}
+
+.workspace-col-actions .history-action-btn {
+  flex-shrink: 0;
 }
 
 .workspace-action-btn {
-  height: 24px;
+  height: 25px;
   padding: 0 8px;
   border-radius: var(--radius-xs);
   background: rgba(0, 240, 255, 0.1);
   border: 1px solid rgba(0, 240, 255, 0.3);
   color: var(--cyan-primary);
   font-size: 11px;
+  font-weight: 500;
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
@@ -3694,6 +3731,118 @@ button:not(.primary-action):disabled:has(.spin) {
 
 button.primary-action:disabled:has(.spin) {
   opacity: 0.9 !important;
+}
+
+/* ==========================================================================
+   Release Publisher Asset Queue & Real-Time Upload Progress
+   ========================================================================== */
+
+.release-meta-grid {
+  display: grid;
+  grid-template-columns: 0.9fr 0.9fr 1.35fr;
+  gap: 8px;
+}
+
+.batch-queue-col-headers.release-assets-col-headers,
+.batch-queue-item.release-asset-item {
+  grid-template-columns: 32px minmax(170px, 1.55fr) 78px minmax(150px, 1.15fr) 60px;
+  gap: 10px;
+}
+
+.release-asset-name-input {
+  width: 100%;
+  background: rgba(6, 11, 22, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: var(--radius-xs);
+  color: var(--text-heading);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 4px 8px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.release-asset-name-input:focus {
+  border-color: var(--cyan-primary);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.2);
+}
+
+.release-col-size {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.release-col-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.release-asset-bar {
+  flex: 1;
+  min-width: 48px;
+  height: 5px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.release-asset-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #00f0ff 0%, #3b82f6 100%);
+  border-radius: 999px;
+  transition: width 0.18s ease;
+}
+
+.release-asset-bar-fill.done {
+  background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
+}
+
+.release-asset-bar-fill.error {
+  background: linear-gradient(90deg, #ef4444 0%, #f87171 100%);
+}
+
+.release-asset-status-text {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.release-asset-status-text.uploading {
+  color: var(--cyan-primary);
+  font-weight: 600;
+}
+
+.release-asset-status-text.done {
+  color: var(--emerald-text);
+  font-weight: 600;
+}
+
+.release-asset-status-text.error {
+  color: var(--crimson-text);
+  font-weight: 600;
+}
+
+.action-pill.release,
+.workspace-action-btn.release {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.workspace-action-btn.release:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.24);
+  border-color: rgba(52, 211, 153, 0.6);
+  color: #a7f3d0;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.28);
 }
 
 @keyframes spin {
