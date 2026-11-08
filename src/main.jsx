@@ -545,8 +545,8 @@ function App() {
   // 版本发布状态 (mode === 'release')
   const [releaseTarget, setReleaseTarget] = useState(() => localStorage.getItem('code-sync-release-target') || localStorage.getItem('code-sync-push-target') || '')
   const [releaseRemoteUrl, setReleaseRemoteUrl] = useState(() => localStorage.getItem('code-sync-release-remote') || '')
-  const [releaseTag, setReleaseTag] = useState('v1.4.1')
-  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.1')
+  const [releaseTag, setReleaseTag] = useState('v1.4.2')
+  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.2')
   const [releaseBranch, setReleaseBranch] = useState('main')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseToken, setReleaseToken] = useState('')
@@ -724,7 +724,9 @@ function App() {
       if (info.suggestedTitle) setReleaseTitle(info.suggestedTitle)
       if (Array.isArray(info.discoveredAssets) && info.discoveredAssets.length > 0) {
         setReleaseAssets(info.discoveredAssets)
-        setReleaseAssetProgressMap({})
+        if (!silent || releaseProgress.status !== 'success') {
+          setReleaseAssetProgressMap({})
+        }
       }
       if (info.recentCommits && (!releaseNotes.trim() || /^-\s*(feat|chore|fix|docs|refactor|perf|style):/m.test(releaseNotes))) {
         setReleaseNotes(`## ${info.suggestedTitle || info.suggestedTag}\n\n### ✨ 更新内容\n${info.recentCommits}\n`)
@@ -1004,7 +1006,7 @@ function App() {
         return
       }
 
-      if (pushRunningRef.current) {
+      if (event.action === 'push' || pushRunningRef.current) {
         if (event.type === 'start') {
           setPushRunning(true)
           setPushProgress({ value: 2, label: event.label, logs: [], status: 'running', provider: event.provider, action: event.action })
@@ -1031,7 +1033,7 @@ function App() {
         return
       }
 
-      if (releaseRunningRef.current) {
+      if (event.action === 'release' || releaseRunningRef.current) {
         if (event.type === 'start') {
           setReleaseRunning(true)
           setReleaseProgress({ value: 2, label: event.label, logs: [], status: 'running' })
@@ -1257,7 +1259,7 @@ function App() {
   }
 
   async function runTask() {
-    if (running || batchRunning) return
+    if (running || batchRunning || pushRunning || releaseRunning) return
     if (!target.trim()) return showToast('请先选择本地项目目录')
     if (action === 'pull' && !url.trim()) return showToast('拉取代码需要输入仓库地址')
     if (!api) return showToast('任务执行需要在桌面版中运行')
@@ -1300,6 +1302,7 @@ function App() {
         shallowClone: provider === 'git' && action === 'pull' ? shallowClone : false,
         recurseSubmodules: provider === 'git' && action === 'pull' ? recurseSubmodules : false
       })
+      setProgress((current) => ({ ...current, value: 100, status: 'success', label: '任务完成' }))
       const entry = {
         id: Date.now(),
         provider,
@@ -1314,8 +1317,11 @@ function App() {
       setRecent(next)
       localStorage.setItem('code-sync-recent', JSON.stringify(next))
     } catch (error) {
+      setProgress((current) => ({ ...current, status: 'error', label: appError(error) }))
       setToast(appError(error))
       window.setTimeout(() => setToast(''), 4200)
+    } finally {
+      setRunning(false)
     }
   }
 
@@ -1582,12 +1588,13 @@ function App() {
 
   // 运行队列中的单个项目
   async function runSingleBatchItem(targetItem) {
-    if (batchRunning || running) return
+    if (batchRunning || running || pushRunning || releaseRunning) return
     if (!batchTargetRoot.trim()) return showToast('请先选择本地保存根目录')
     if (!api) return showToast('任务执行需要在桌面版中运行')
 
     showToast(`正在单独执行：${targetItem.name}`)
     setBatchItemStatuses((prev) => ({ ...prev, [targetItem.id]: { status: 'running', error: '', action: 'pull' } }))
+    batchRunningRef.current = true
 
     let pathInfo = { exists: false, isDirectory: false, empty: true, hasGit: false, hasSvn: false }
     try {
@@ -1633,6 +1640,8 @@ function App() {
     } catch (err) {
       setBatchItemStatuses((prev) => ({ ...prev, [targetItem.id]: { status: 'error', error: appError(err), action: taskAction } }))
       showToast(`${targetItem.name} 失败: ${appError(err)}`)
+    } finally {
+      batchRunningRef.current = false
     }
   }
 
@@ -1942,7 +1951,7 @@ function App() {
   }
 
   function generateReleaseChangelog() {
-    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.1'
+    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.2'
     const commits = releaseWorkspace?.recentCommits || '- 新增：常规功能升级与细节体验优化'
     const assetSection = releaseAssets.length > 0
       ? `\n### 📦 发行版附件\n${releaseAssets.map((a) => `- \`${a.uploadName || a.name}\` (${formatFileSize(a.size)})`).join('\n')}\n`
@@ -1954,7 +1963,7 @@ function App() {
   async function runReleaseTask() {
     if (running || batchRunning || pushRunning || releaseRunning) return
     if (!releaseRemoteUrl.trim()) return showToast('请先填写远程 GitHub / Gitee 仓库地址')
-    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.1）')
+    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.2）')
     if (!api) return showToast('任务执行需要在桌面版中运行')
 
     setReleaseRunning(true)
@@ -1995,6 +2004,28 @@ function App() {
         setReleasePublishedUrl(res.releaseUrl)
       }
 
+      setReleaseProgress((current) => ({
+        ...current,
+        value: 100,
+        label: `Release ${releaseTag.trim()} 发布完成`,
+        status: 'success'
+      }))
+      setReleaseAssetProgressMap((prev) => {
+        const next = { ...prev }
+        releaseAssets.forEach((a) => {
+          next[a.path] = {
+            ...(next[a.path] || {}),
+            path: a.path,
+            status: 'done',
+            percent: 100,
+            uploadedBytes: a.size,
+            totalBytes: a.size,
+            speed: '完成'
+          }
+        })
+        return next
+      })
+
       const entry = {
         id: Date.now(),
         provider: 'git',
@@ -2013,6 +2044,11 @@ function App() {
 
       showToast(`🎉 Release ${releaseTag.trim()} 已成功发布！`)
     } catch (error) {
+      setReleaseProgress((current) => ({
+        ...current,
+        status: 'error',
+        label: appError(error)
+      }))
       showToast(appError(error))
     } finally {
       setReleaseRunning(false)
@@ -2090,10 +2126,22 @@ function App() {
         return next
       })
 
+      setPushProgress((current) => ({
+        ...current,
+        value: 100,
+        label: '代码推送完成',
+        status: 'success'
+      }))
+
       setPushCommitMsg('')
       await inspectPushWorkspaceNow(pushTarget.trim(), true)
       showToast('代码已成功推送到远程仓库')
     } catch (error) {
+      setPushProgress((current) => ({
+        ...current,
+        status: 'error',
+        label: appError(error)
+      }))
       showToast(appError(error))
     } finally {
       setPushRunning(false)
@@ -2120,7 +2168,11 @@ function App() {
       const status = await api.getCredentialStatus()
       setCredentialStatus(status)
       setCredentialForm(credentialFormFromStatus(status))
-      setCredentialTab(provider === 'svn' || (mode === 'batch' && batchProvider === 'svn') ? 'svn' : 'git')
+      const isSvnActive =
+        (mode === 'single' && provider === 'svn') ||
+        (mode === 'batch' && batchProvider === 'svn') ||
+        (mode === 'push' && pushProvider === 'svn')
+      setCredentialTab(isSvnActive ? 'svn' : 'git')
       setCredentialTestMessage('')
       setSettingsOpen(true)
     } catch (error) {
@@ -2160,9 +2212,19 @@ function App() {
     setCredentialTesting(true)
     setCredentialTestMessage(`正在用当前 ${credentialTab.toUpperCase()} 地址验证凭证...`)
     try {
-      const testUrl = mode === 'batch'
-        ? (credentialTab === 'git' ? (batchItems[0]?.url || 'https://github.com') : (batchItems[0]?.url || ''))
-        : url
+      let testUrl = url
+      if (mode === 'batch') {
+        testUrl = batchItems[0]?.url || ''
+      } else if (mode === 'push') {
+        testUrl = pushRemoteUrl || pushWorkspace?.url || ''
+      } else if (mode === 'release') {
+        testUrl = releaseRemoteUrl || releaseWorkspace?.url || ''
+      } else if (mode === 'workspace') {
+        testUrl = workspaceRepos.find((r) => r.provider === credentialTab && r.url)?.url || ''
+      }
+      if (!testUrl && credentialTab === 'git') {
+        testUrl = pushRemoteUrl || releaseRemoteUrl || url || 'https://github.com'
+      }
       const result = await api.testCredentials({ provider: credentialTab, url: testUrl, credentials: credentialForm[credentialTab] })
       const detail = credentialTab === 'git'
         ? (result.branch ? `默认分支 ${result.branch}` : '远程仓库可访问')
@@ -2195,6 +2257,10 @@ function App() {
       setMode('release')
       if (entry.target && !/^https?:\/\//i.test(entry.target)) handleSetReleaseTarget(entry.target)
       if (entry.url) handleSetReleaseRemoteUrl(entry.url)
+      if (entry.version) {
+        const cleanTag = entry.version.replace(/^Release\s+/i, '').trim()
+        if (cleanTag) setReleaseTag(cleanTag)
+      }
       showToast(`已载入版本发布：${entry.version || ''}`)
       return
     }
@@ -2238,7 +2304,7 @@ function App() {
           <div className="brand-mark" title="CodeSync Studio">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
-          <span className="brand-badge">v1.4.1</span>
+          <span className="brand-badge">v1.4.2</span>
         </div>
 
         <nav className="side-nav">
@@ -2853,6 +2919,11 @@ function App() {
                 releaseRunning={releaseRunning}
                 releaseProgress={releaseProgress}
                 onInspect={() => inspectReleaseWorkspaceNow(releaseTarget, false)}
+                onResetRelease={() => {
+                  setReleaseProgress({ value: 0, label: '等待 Release 发布任务启动', logs: [], status: 'idle' })
+                  setReleasePublishedUrl('')
+                  setReleaseAssetProgressMap({})
+                }}
                 onGenerateChangelog={generateReleaseChangelog}
                 onOpenLocalPath={openLocalPath}
                 onStartRelease={runReleaseTask}
@@ -4009,7 +4080,11 @@ function PushSyncPanel({
               value={pushCommitMsg}
               onChange={(e) => setPushCommitMsg(e.target.value)}
               disabled={pushRunning || (pushProvider === 'git' && !pushCommitChanges)}
-              placeholder="输入本次提交说明，例如：feat: 更新核心模块代码（留空使用默认说明）"
+              placeholder={
+                pushProvider === 'git' && !pushCommitChanges
+                  ? '当前为「仅推送已有提交」模式，无需填写提交说明'
+                  : '输入本次提交说明，例如：feat: 更新核心模块代码（留空使用默认说明）'
+              }
             />
           </div>
           <div className="batch-textarea-toolbar">
@@ -4774,7 +4849,6 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
         </div>
         <div className="dialog-actions">
           <button className="ghost-action" onClick={onClear} disabled={saving || testing}><Trash2 size={15} />清除当前凭证</button>
-          <span className="dialog-hint">留空密码字段可保持原配置</span>
           <button className="primary-action" onClick={onSave} disabled={saving || testing || status?.storageAvailable === false}>
             {saving ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />}
             保存凭证
@@ -5032,6 +5106,7 @@ function ReleaseSyncPanel({
   releaseRunning,
   releaseProgress,
   onInspect,
+  onResetRelease,
   onGenerateChangelog,
   onOpenLocalPath,
   onStartRelease
@@ -5094,7 +5169,7 @@ function ReleaseSyncPanel({
           </div>
         </div>
 
-        <div className="release-meta-grid">
+        <div className="batch-options-grid">
           <div className="field-group" style={{ marginTop: 0 }}>
             <div className="label-row">
               <label className="field-title">版本标签</label>
@@ -5104,7 +5179,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTag}
                 onChange={(e) => setReleaseTag(e.target.value)}
-                placeholder="v1.4.1"
+                placeholder="v1.4.2"
                 disabled={releaseRunning}
               />
             </div>
@@ -5141,7 +5216,9 @@ function ReleaseSyncPanel({
               )}
             </div>
           </div>
+        </div>
 
+        <div className="batch-options-grid">
           <div className="field-group" style={{ marginTop: 0 }}>
             <div className="label-row">
               <label className="field-title">发布标题</label>
@@ -5151,14 +5228,12 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTitle}
                 onChange={(e) => setReleaseTitle(e.target.value)}
-                placeholder="Release 标题"
+                placeholder="CodeSync Studio v1.4.2"
                 disabled={releaseRunning}
               />
             </div>
           </div>
-        </div>
 
-        <div className="batch-options-grid">
           <div className="field-group" style={{ marginTop: 0 }}>
             <div className="label-row">
               <label className="field-title">访问令牌</label>
@@ -5175,47 +5250,40 @@ function ReleaseSyncPanel({
               />
             </div>
           </div>
+        </div>
 
-          <div className="field-group" style={{ marginTop: 0 }}>
-            <div className="label-row">
-              <label className="field-title">发布选项</label>
-            </div>
-            <div className="push-strategy-pills">
+        <div className="field-group batch-urls-group">
+          <div className="label-row release-notes-header-row">
+            <label className="field-title">更新说明</label>
+            <div className="release-inline-options">
               <button
                 type="button"
-                className={`push-strategy-pill ${releasePushTag ? 'active' : ''}`}
+                className={`release-mini-pill ${releasePushTag ? 'active' : ''}`}
                 onClick={() => setReleasePushTag(!releasePushTag)}
                 disabled={releaseRunning}
                 title="发布前自动在本地创建并向远程推送该 Git Tag"
               >
-                <Tag size={11} />推送标签
+                <Tag size={10} />推送标签
               </button>
               <button
                 type="button"
-                className={`push-strategy-pill ${releasePrerelease ? 'active' : ''}`}
+                className={`release-mini-pill ${releasePrerelease ? 'active' : ''}`}
                 onClick={() => setReleasePrerelease(!releasePrerelease)}
                 disabled={releaseRunning}
                 title="标记为预发布版本 (Pre-release)"
               >
-                <Sparkles size={11} />预发布
+                <Sparkles size={10} />预发布
               </button>
               <button
                 type="button"
-                className={`push-strategy-pill ${releaseDraft ? 'active' : ''}`}
+                className={`release-mini-pill ${releaseDraft ? 'active' : ''}`}
                 onClick={() => setReleaseDraft(!releaseDraft)}
                 disabled={releaseRunning}
                 title="保存为草稿 (Draft) 而不立即公开"
               >
-                <FileText size={11} />草稿
+                <FileText size={10} />草稿
               </button>
             </div>
-          </div>
-        </div>
-
-        <div className="field-group batch-urls-group">
-          <div className="label-row">
-            <label className="field-title">更新说明</label>
-            <span>支持 Markdown</span>
           </div>
           <div className="batch-textarea-wrap">
             <textarea
@@ -5272,6 +5340,7 @@ function ReleaseSyncPanel({
             setReleasePrerelease(false)
             setReleaseDraft(false)
             setReleasePushTag(true)
+            if (onResetRelease) onResetRelease()
             if (releaseTarget.trim()) onInspect()
           }}
           disabled={releaseRunning}
@@ -5315,7 +5384,7 @@ function ReleaseTaskPanel({
     if (autoScroll && terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight
     }
-  }, [filteredLogs.length, autoScroll])
+  }, [filteredLogs, autoScroll])
 
   const statusClass =
     progress.status === 'success' ? 'success' :

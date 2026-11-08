@@ -131,7 +131,12 @@ function clearCredentialProvider(provider) {
 }
 
 function sendTaskEvent(event) {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task:event', event)
+  const enriched = {
+    provider: activeJob?.provider,
+    action: activeJob?.action,
+    ...event
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task:event', enriched)
 }
 
 function stripAnsi(value) {
@@ -1382,12 +1387,17 @@ function uploadReleaseAssetWithProgress({ jobId, uploadUrlTemplate, asset, asset
         if (res.statusCode >= 200 && res.statusCode < 300) {
           let parsedBody = null
           try { parsedBody = JSON.parse(body) } catch {}
-          const overallPct = Math.min(98, 28 + Math.round(((uploadedBeforeThisAsset + fileSize) / Math.max(1, grandTotalBytes)) * 68))
+          const isLastAsset = assetIndex + 1 === totalAssets
+          const overallPct = isLastAsset
+            ? 100
+            : Math.min(99, 28 + Math.round(((uploadedBeforeThisAsset + fileSize) / Math.max(1, grandTotalBytes)) * 70))
           sendTaskEvent({
             type: 'step',
             jobId,
             value: overallPct,
-            label: `附件上传完成 (${assetIndex + 1}/${totalAssets}): ${uploadName}`,
+            label: isLastAsset
+              ? `Release 附件全部上传完成 (${totalAssets}/${totalAssets})`
+              : `附件上传完成 (${assetIndex + 1}/${totalAssets}): ${uploadName}`,
             releaseAssetProgress: {
               path: asset.path,
               status: 'done',
@@ -1493,7 +1503,7 @@ async function publishReleaseTask(jobId, payload) {
   sendTaskEvent({ type: 'step', jobId, value: 4, label: '正在校验仓库信息与发布凭据...' })
 
   const tagName = String(rawTag || '').trim()
-  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.1）。')
+  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.2）。')
   const releaseTitle = String(rawTitle || '').trim() || tagName
   const releaseNotes = String(rawNotes || '').trim()
   const targetCommitish = String(rawCommitish || '').trim() || 'main'
@@ -1698,6 +1708,7 @@ async function publishReleaseTask(jobId, payload) {
     label: `Release ${tagName} 发布完成`,
     releaseUrl: releaseData.html_url
   })
+  await new Promise((r) => setTimeout(r, 30))
   return { jobId, ok: true, releaseUrl: releaseData.html_url }
 }
 
@@ -1706,7 +1717,7 @@ function emitLine(jobId, text, source = 'stdout') {
   if (!clean) return
   const percent = clean.match(/(?:^|\s)(\d{1,3})%/)?.[1]
   sendTaskEvent({ type: 'line', jobId, text: clean, source, percent: percent ? Number(percent) : null, time: new Date().toISOString() })
-  if (percent) sendTaskEvent({ type: 'progress', jobId, value: Number(percent), label: clean })
+  if (percent && activeJob?.action !== 'release') sendTaskEvent({ type: 'progress', jobId, value: Number(percent), label: clean })
 }
 
 function runProcess(jobId, command, args, cwd, options = {}) {
@@ -1774,7 +1785,7 @@ async function runStep(jobId, label, command, args, cwd, progressStart, progress
 async function runTask(payload) {
   if (activeJob) throw new Error('已有任务正在执行，请等待当前任务完成。')
   const jobId = crypto.randomUUID()
-  activeJob = { jobId, child: null }
+  activeJob = { jobId, child: null, provider: payload.provider, action: payload.action }
   const {
     provider,
     action,

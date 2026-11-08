@@ -2355,7 +2355,7 @@ button:disabled {
 
 .batch-queue-col-headers {
   display: grid;
-  grid-template-columns: 32px minmax(110px, 1.1fr) minmax(150px, 1.35fr) minmax(120px, 1.2fr) 68px 64px;
+  grid-template-columns: 32px minmax(105px, 1.05fr) minmax(155px, 1.4fr) minmax(115px, 1.15fr) 72px 74px;
   gap: 8px;
   padding: 5px 12px;
   background: rgba(4, 7, 16, 0.85);
@@ -2378,7 +2378,7 @@ button:disabled {
 
 .batch-queue-item {
   display: grid;
-  grid-template-columns: 32px minmax(110px, 1.1fr) minmax(150px, 1.35fr) minmax(120px, 1.2fr) 68px 64px;
+  grid-template-columns: 32px minmax(105px, 1.05fr) minmax(155px, 1.4fr) minmax(115px, 1.15fr) 72px 74px;
   gap: 8px;
   align-items: center;
   padding: 6px 12px;
@@ -2796,6 +2796,7 @@ button:disabled {
   border-radius: var(--radius-full);
   font-size: 10px;
   font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .action-pill.pull {
@@ -3619,12 +3620,18 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 8px 12px;
   background: rgba(6, 11, 22, 0.8);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-md);
   margin-bottom: 14px;
   font-size: 12px;
+}
+
+.credential-test .ghost-action {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .credential-test b {
@@ -3655,6 +3662,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding-top: 14px;
   border-top: 1px solid var(--border-subtle);
   position: sticky;
@@ -3669,9 +3677,9 @@ button:disabled {
   z-index: 2;
 }
 
-.dialog-hint {
-  font-size: 11px;
-  color: var(--text-muted);
+.dialog-actions .ghost-action {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* ==========================================================================
@@ -3741,6 +3749,44 @@ button.primary-action:disabled:has(.spin) {
   display: grid;
   grid-template-columns: 0.9fr 0.9fr 1.35fr;
   gap: 8px;
+}
+
+.release-notes-header-row {
+  margin-bottom: 4px;
+}
+
+.release-inline-options {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.release-mini-pill {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-xs);
+  background: rgba(6, 11, 22, 0.85);
+  border: 1px solid var(--border-input);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.release-mini-pill:hover:not(:disabled) {
+  color: var(--text-heading);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.release-mini-pill.active {
+  background: rgba(0, 240, 255, 0.14);
+  border-color: rgba(0, 240, 255, 0.45);
+  color: var(--cyan-primary);
+  font-weight: 600;
 }
 
 .batch-queue-col-headers.release-assets-col-headers,
