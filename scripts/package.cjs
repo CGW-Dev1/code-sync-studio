@@ -19,14 +19,24 @@ function main() {
   if (build.status !== 0) process.exit(build.status || 1)
   if (!fs.existsSync(electronDist)) throw new Error(`Electron runtime not found: ${electronDist}`)
 
-  fs.rmSync(portableRoot, { recursive: true, force: true })
+  try {
+    fs.rmSync(portableRoot, { recursive: true, force: true })
+  } catch {
+    // If CodeSync Studio.exe is running, update resources/app in-place
+  }
   fs.mkdirSync(appRoot, { recursive: true })
-  copy(electronDist, portableApp)
+  if (!fs.existsSync(path.join(portableApp, 'CodeSync Studio.exe'))) {
+    copy(electronDist, portableApp)
+    if (fs.existsSync(path.join(portableApp, 'electron.exe'))) {
+      fs.renameSync(path.join(portableApp, 'electron.exe'), path.join(portableApp, 'CodeSync Studio.exe'))
+    }
+  }
+  fs.rmSync(path.join(appRoot, 'dist'), { recursive: true, force: true })
+  fs.rmSync(path.join(appRoot, 'electron'), { recursive: true, force: true })
   copy(path.join(root, 'dist'), path.join(appRoot, 'dist'))
   copy(path.join(root, 'electron'), path.join(appRoot, 'electron'))
   copy(path.join(root, 'assets'), path.join(appRoot, 'assets'))
   copy(path.join(root, 'package.json'), path.join(appRoot, 'package.json'))
-  fs.renameSync(path.join(portableApp, 'electron.exe'), path.join(portableApp, 'CodeSync Studio.exe'))
 
   const builder = path.join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js')
   const packageResult = spawnSync(process.execPath, [builder, '--prepackaged', portableApp, '--win', 'nsis', 'portable', '--config.directories.output=release-installer-codesync'], { cwd: root, stdio: 'inherit' })
