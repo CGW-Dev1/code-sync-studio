@@ -279,9 +279,14 @@ function resolveItemVersionPayload(item, branchSelection, batchProvider, globalB
         branchName = val.slice(4) || ''
       } else if (val.startsWith('branch:')) {
         branchName = val.slice(7) || ''
+      } else if ((repoData?.tags || []).some((t) => t.name === val) && !(repoData?.branches || []).some((b) => b.name === val)) {
+        kind = 'tag'
+        branchName = val
       } else {
         branchName = val
       }
+    } else if (repoData?.defaultBranch && repoData.defaultBranch !== 'HEAD') {
+      branchName = repoData.defaultBranch
     }
     const baseLabel = branchName || '默认分支'
     return {

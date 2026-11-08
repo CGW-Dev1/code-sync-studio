@@ -1991,13 +1991,29 @@ async function runTask(payload) {
         const currentBranch = branchResult.stdout.trim()
         let branch = version?.name && version.name !== 'HEAD' ? version.name.trim() : ''
 
+        if (!branch && !currentBranch) {
+          const symRes = await capture('git', ['-C', target, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], target).catch(() => ({ stdout: '' }))
+          const symBranch = stripAnsi(symRes.stdout || '').trim().replace(/^origin\//, '')
+          if (symBranch && symBranch !== 'HEAD') {
+            branch = symBranch
+          } else {
+            const remRes = await capture('git', ['-C', target, 'branch', '-r'], target).catch(() => ({ stdout: '' }))
+            const remBranches = stripAnsi(remRes.stdout || '')
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .filter((l) => l && !l.includes('->') && l.startsWith('origin/'))
+              .map((l) => l.replace(/^origin\//, ''))
+            branch = remBranches.find((b) => b === 'main' || b === 'master') || remBranches[0] || ''
+          }
+        }
+
         const fetchArgs = ['-C', target, 'fetch', '--progress', '--prune', 'origin']
-        if (branch) fetchArgs.push(branch)
+        if (branch) fetchArgs.push(`+refs/heads/${branch}:refs/remotes/origin/${branch}`)
         await runStep(jobId, `获取分支 ${branch || currentBranch || '最新提交'}`, 'git', fetchArgs, target, 4, 50, taskOptions)
 
         if (sparsePath) await runStep(jobId, `设置稀疏检出 ${sparsePath}`, 'git', ['-C', target, 'sparse-checkout', 'set', '--no-cone', gitSparsePattern(sparsePath)], target, 52, 65, taskOptions)
 
-        if (branch && currentBranch && branch !== currentBranch) {
+        if (branch && branch !== currentBranch) {
           try {
             await runStep(jobId, `切换分支至 ${branch}`, 'git', ['-C', target, 'checkout', branch], target, 66, 75, taskOptions)
           } catch {
