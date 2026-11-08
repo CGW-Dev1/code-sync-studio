@@ -3188,7 +3188,7 @@ button:disabled {
 
 .workspace-table-header,
 .workspace-table-row {
-  grid-template-columns: 34px 62px 1fr 0.85fr 1.05fr 1.2fr 1.1fr 248px;
+  grid-template-columns: 32px 58px 0.9fr 0.72fr 0.65fr 1.25fr 1.05fr 0.95fr 248px;
 }
 
 .workspace-col-name {
@@ -3198,20 +3198,23 @@ button:disabled {
   color: var(--text-heading);
 }
 
-.workspace-col-status {
+.workspace-col-status,
+.workspace-col-remote-sync {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 5px;
 }
 
 .workspace-status-pill {
   display: inline-flex;
   align-items: center;
-  padding: 1px 7px;
+  gap: 4px;
+  padding: 2px 7px;
   border-radius: var(--radius-full);
   font-size: 10.5px;
   font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .workspace-status-pill.clean {
@@ -3220,10 +3223,24 @@ button:disabled {
   border: 1px solid var(--border-subtle);
 }
 
+.workspace-status-pill.checking {
+  background: rgba(56, 189, 248, 0.08);
+  color: var(--cyan-bright);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+}
+
 .workspace-status-pill.dirty {
   background: var(--amber-bg);
   color: var(--amber-text);
   border: 1px solid var(--amber-border);
+}
+
+.workspace-status-pill.need-update {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  font-weight: 600;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.16);
 }
 
 .workspace-status-pill.ahead,
@@ -3237,6 +3254,30 @@ button:disabled {
   background: rgba(56, 189, 248, 0.14);
   color: var(--cyan-bright);
   border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.workspace-hash-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.workspace-hash-tag.diff {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #fcd34d;
+}
+
+.history-filter-pill.has-alert:not(.active) {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fbbf24;
 }
 
 .workspace-col-actions {
@@ -3268,6 +3309,18 @@ button:disabled {
   white-space: nowrap;
   flex-shrink: 0;
   transition: all 0.15s ease;
+}
+
+.workspace-action-btn.needs-update {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.18);
+}
+
+.workspace-action-btn.needs-update:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.28);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
 }
 
 .workspace-action-btn:hover:not(:disabled) {

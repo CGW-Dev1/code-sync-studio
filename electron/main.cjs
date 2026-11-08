@@ -673,10 +673,26 @@ async function inspectPushWorkspace({ target }) {
     const topResult = await capture('git', ['-C', cleanTarget, 'rev-parse', '--show-toplevel'], cleanTarget)
     const root = topResult.stdout.trim() || cleanTarget
     const branchRes = await capture('git', ['-C', cleanTarget, 'branch', '--show-current'], cleanTarget).catch(() => ({ stdout: '' }))
-    const symRefRes = !branchRes.stdout.trim()
+    const currentBranchName = branchRes.stdout.trim()
+    const isDetached = !currentBranchName
+    const symRefRes = !currentBranchName
       ? await capture('git', ['-C', cleanTarget, 'symbolic-ref', '--short', 'HEAD'], cleanTarget).catch(() => ({ stdout: '' }))
       : { stdout: '' }
-    const branch = branchRes.stdout.trim() || symRefRes.stdout.trim() || 'main'
+    let defaultRemoteBranch = ''
+    if (!currentBranchName && !symRefRes.stdout.trim()) {
+      const originHeadRes = await capture('git', ['-C', cleanTarget, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], cleanTarget).catch(() => ({ stdout: '' }))
+      defaultRemoteBranch = stripAnsi(originHeadRes.stdout || '').trim().replace(/^origin\//, '')
+      if (!defaultRemoteBranch || defaultRemoteBranch === 'HEAD') {
+        const remRes = await capture('git', ['-C', cleanTarget, 'branch', '-r'], cleanTarget).catch(() => ({ stdout: '' }))
+        const remBranches = stripAnsi(remRes.stdout || '')
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => l && !l.includes('->') && l.startsWith('origin/'))
+          .map((l) => l.replace(/^origin\//, ''))
+        defaultRemoteBranch = remBranches.find((b) => b === 'main' || b === 'master') || remBranches[0] || ''
+      }
+    }
+    const branch = currentBranchName || symRefRes.stdout.trim() || defaultRemoteBranch || 'main'
     const branchesRes = await capture('git', ['-C', cleanTarget, 'branch', '--format=%(refname:short)'], cleanTarget).catch(() => ({ stdout: '' }))
     const branchList = branchesRes.stdout.split(/\r?\n/).map((b) => b.trim()).filter(Boolean)
     if (!branchList.includes(branch)) branchList.unshift(branch)
@@ -693,19 +709,25 @@ async function inspectPushWorkspace({ target }) {
     } catch {
       if (url && branch) {
         try {
-          const aheadRes = await capture('git', ['-C', cleanTarget, 'rev-list', '--count', `origin/${branch}..HEAD`], cleanTarget)
-          ahead = Number(aheadRes.stdout.trim()) || 0
+          const abOriginRes = await capture('git', ['-C', cleanTarget, 'rev-list', '--left-right', '--count', `HEAD...origin/${branch}`], cleanTarget)
+          const parts = abOriginRes.stdout.trim().split(/\s+/)
+          ahead = Number(parts[0]) || 0
+          behind = Number(parts[1]) || 0
         } catch {}
       }
     }
 
-    const lastCommitRes = await capture('git', ['-C', cleanTarget, 'log', '-1', '--pretty=format:%h|||%s'], cleanTarget).catch(() => ({ stdout: '' }))
+    const lastCommitRes = await capture('git', ['-C', cleanTarget, 'log', '-1', '--pretty=format:%H|||%h|||%s'], cleanTarget).catch(() => ({ stdout: '' }))
     const rawLastCommit = lastCommitRes.stdout.trim()
     let formattedLastCommit = ''
+    let localFullHash = ''
+    let localHash = ''
     if (rawLastCommit) {
-      const [hashPart, ...subjectParts] = rawLastCommit.split('|||')
+      const [fullHashPart, shortHashPart, ...subjectParts] = rawLastCommit.split('|||')
+      localFullHash = (fullHashPart || '').trim()
+      localHash = (shortHashPart || '').trim() || localFullHash.slice(0, 7)
       const zhSubject = translateCommitSubjectToChinese(subjectParts.join('|||'))
-      formattedLastCommit = `${hashPart} · ${zhSubject}`
+      formattedLastCommit = `${localHash} · ${zhSubject}`
     }
     const statusRes = await capture('git', ['-c', 'core.quotePath=false', '-C', cleanTarget, 'status', '--porcelain=v1', '-uall'], cleanTarget).catch(() => ({ stdout: '' }))
     const changes = statusRes.stdout
@@ -781,10 +803,13 @@ async function inspectPushWorkspace({ target }) {
       initialized: true,
       root,
       branch,
+      isDetached,
       branches: branchList,
       url,
       ahead,
       behind,
+      localFullHash,
+      localHash,
       lastCommit: formattedLastCommit,
       changes
     }
@@ -819,6 +844,8 @@ async function inspectPushWorkspace({ target }) {
       branches: ['HEAD'],
       url: info.url || '',
       revision: info.revision || 'HEAD',
+      localFullHash: info.revision || '',
+      localHash: info.revision ? `r${info.revision}` : '',
       ahead: 0,
       behind: 0,
       lastCommit: info.revision ? `r${info.revision}` : '',
@@ -836,6 +863,8 @@ async function inspectPushWorkspace({ target }) {
     url: '',
     ahead: 0,
     behind: 0,
+    localFullHash: '',
+    localHash: '',
     lastCommit: '',
     changes: plainFiles
   }
@@ -876,11 +905,151 @@ async function getWorkspaceDiff({ provider, target, filePath }) {
   return { diff: diffText || '暂无可显示的差异内容。' }
 }
 
-async function scanLocalRepos({ rootDir }) {
-  if (!rootDir || !rootDir.trim()) throw new Error('请先选择要扫描的本地根目录。')
-  const cleanRoot = rootDir.trim()
-  if (!fs.existsSync(cleanRoot)) throw new Error('所选目录不存在。')
+function withTimeout(promise, ms, fallbackError = '远程检测超时') {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(fallbackError)), ms)
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val) },
+      (err) => { clearTimeout(timer); reject(err) }
+    )
+  })
+}
 
+async function captureGitRemoteWithAuth(args, cwd, url, timeoutMs = 8000) {
+  try {
+    return await withTimeout(capture('git', args, cwd, { targetUrl: url }), timeoutMs)
+  } catch (err) {
+    if (/returned error: 403|Permission to .* denied|Authentication failed|returned error: 401/i.test(err?.message || '')) {
+      const gcm = getSystemGcmCredential()
+      if (gcm?.token) {
+        return await withTimeout(
+          capture('git', args, cwd, {
+            targetUrl: url,
+            gitCredentials: { mode: 'https', username: gcm.username, token: gcm.token }
+          }),
+          timeoutMs
+        )
+      }
+      return await withTimeout(
+        capture('git', args, cwd, {
+          targetUrl: url,
+          gitCredentials: { mode: 'https', username: '', token: '', clearToken: true }
+        }),
+        timeoutMs
+      )
+    }
+    throw err
+  }
+}
+
+async function checkRepoRemoteSync(target, info) {
+  const localHash = info.localHash || ''
+  if (!info.url) {
+    return { remoteSync: 'no-remote', localHash, remoteHash: '', ahead: info.ahead || 0, behind: info.behind || 0 }
+  }
+  if (info.provider === 'svn') {
+    try {
+      const res = await withTimeout(capture('svn', ['info', '--xml', info.url], target, { targetUrl: info.url }), 8000)
+      const remoteInfo = parseSvnInfo(res.stdout)
+      const remoteRevStr = remoteInfo.revision || ''
+      const remoteHash = remoteRevStr ? `r${remoteRevStr}` : ''
+      const localRev = Number(info.revision) || 0
+      const remoteRev = Number(remoteRevStr) || 0
+      if (localRev > 0 && remoteRev > 0) {
+        if (remoteRev > localRev) {
+          return { remoteSync: 'behind', localHash, remoteHash, ahead: 0, behind: remoteRev - localRev }
+        }
+        return { remoteSync: 'synced', localHash, remoteHash, ahead: 0, behind: 0 }
+      }
+      return { remoteSync: 'synced', localHash, remoteHash, ahead: 0, behind: 0 }
+    } catch {
+      return { remoteSync: 'offline', localHash, remoteHash: '', ahead: 0, behind: 0 }
+    }
+  }
+
+  try {
+    const branch = info.branch && info.branch !== 'HEAD' ? info.branch : ''
+    const lsArgs = ['-C', target, 'ls-remote', 'origin']
+    if (branch) lsArgs.push(`refs/heads/${branch}`, 'HEAD')
+    else lsArgs.push('HEAD')
+    const lsRes = await captureGitRemoteWithAuth(lsArgs, target, info.url, 8000)
+    const lines = stripAnsi(lsRes.stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    let remoteFullHash = ''
+    if (branch) {
+      const branchLine = lines.find((l) => l.endsWith(`\trefs/heads/${branch}`) || l.endsWith(` refs/heads/${branch}`))
+      if (branchLine) remoteFullHash = branchLine.split(/\s+/)[0] || ''
+    }
+    if (!remoteFullHash && lines.length > 0) {
+      const headLine = lines.find((l) => l.endsWith('\tHEAD') || l.endsWith(' HEAD')) || lines[0]
+      remoteFullHash = headLine.split(/\s+/)[0] || ''
+    }
+    const remoteHash = remoteFullHash ? remoteFullHash.slice(0, 7) : ''
+    if (!remoteFullHash) {
+      if (info.localFullHash) {
+        return { remoteSync: 'ahead', localHash, remoteHash: '', ahead: Math.max(info.ahead || 0, 1), behind: 0 }
+      }
+      return { remoteSync: 'synced', localHash, remoteHash: '', ahead: 0, behind: 0 }
+    }
+    if (info.localFullHash && info.localFullHash === remoteFullHash) {
+      return {
+        remoteSync: info.isDetached ? 'detached' : 'synced',
+        localHash,
+        remoteHash,
+        ahead: 0,
+        behind: 0
+      }
+    }
+    if (info.localFullHash) {
+      let hasRemoteObj = false
+      try {
+        await capture('git', ['-C', target, 'cat-file', '-e', `${remoteFullHash}^{commit}`], target)
+        hasRemoteObj = true
+      } catch {}
+      if (!hasRemoteObj) {
+        try {
+          const fetchArgs = ['-C', target, 'fetch', '--quiet', 'origin']
+          if (branch) fetchArgs.push(`+refs/heads/${branch}:refs/remotes/origin/${branch}`)
+          await captureGitRemoteWithAuth(fetchArgs, target, info.url, 10000)
+          hasRemoteObj = true
+        } catch {}
+      }
+      try {
+        const abRes = await capture('git', ['-C', target, 'rev-list', '--left-right', '--count', `${info.localFullHash}...${remoteFullHash}`], target)
+        const parts = abRes.stdout.trim().split(/\s+/)
+        const ahead = Number(parts[0]) || 0
+        const behind = Number(parts[1]) || 0
+        const remoteSync = behind > 0 && ahead > 0 ? 'diverged' : behind > 0 ? 'behind' : ahead > 0 ? 'ahead' : 'behind'
+        return {
+          remoteSync,
+          localHash,
+          remoteHash,
+          ahead,
+          behind: behind || (remoteSync === 'behind' ? 1 : 0)
+        }
+      } catch {
+        try {
+          await capture('git', ['-C', target, 'merge-base', '--is-ancestor', remoteFullHash, info.localFullHash], target)
+          return { remoteSync: 'ahead', localHash, remoteHash, ahead: Math.max(info.ahead || 0, 1), behind: 0 }
+        } catch {
+          return { remoteSync: 'behind', localHash, remoteHash, ahead: info.ahead || 0, behind: Math.max(info.behind || 0, 1) }
+        }
+      }
+    }
+    return { remoteSync: 'behind', localHash, remoteHash, ahead: 0, behind: 1 }
+  } catch {
+    const fallbackSync = (info.behind || 0) > 0 && (info.ahead || 0) > 0
+      ? 'diverged'
+      : (info.behind || 0) > 0
+        ? 'behind'
+        : (info.ahead || 0) > 0
+          ? 'ahead'
+          : 'offline'
+    return { remoteSync: fallbackSync, localHash, remoteHash: '', ahead: info.ahead || 0, behind: info.behind || 0 }
+  }
+}
+
+async function scanLocalRepos({ rootDir, checkRemote = false, targets = null } = {}) {
+  const cleanRoot = (rootDir || '').trim()
   const repoDirs = []
   const seenPaths = new Set()
   const ignoreDirs = new Set(['.git', '.svn', 'node_modules', 'dist', 'build', '.next', 'out', 'release-portable', 'release-installer-codesync'])
@@ -892,86 +1061,121 @@ async function scanLocalRepos({ rootDir }) {
     repoDirs.push({ path: normalized, name: path.basename(normalized) || normalized, provider })
   }
 
-  function discover(dir, depth = 0) {
-    if (depth > 3 || repoDirs.length >= 60) return
-    let hasGit = false
-    let hasSvn = false
-    try {
-      hasGit = fs.existsSync(path.join(dir, '.git'))
-      hasSvn = !hasGit && fs.existsSync(path.join(dir, '.svn'))
-    } catch {}
-    if (hasGit || hasSvn) {
-      addRepo(dir, hasGit ? 'git' : 'svn')
-      return
+  if (Array.isArray(targets) && targets.length > 0) {
+    for (const t of targets) {
+      if (t && t.target && fs.existsSync(t.target)) {
+        addRepo(t.target, t.provider || 'git')
+      }
     }
-    let entries = []
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || ignoreDirs.has(entry.name) || entry.name.startsWith('.')) continue
-      discover(path.join(dir, entry.name), depth + 1)
-    }
-  }
+  } else {
+    if (!cleanRoot) throw new Error('请先选择要扫描的本地根目录。')
+    if (!fs.existsSync(cleanRoot)) throw new Error('所选目录不存在。')
 
-  discover(cleanRoot, 0)
-
-  // If the user selected a subdirectory inside a Git/SVN repository, walk up to find the enclosing repo root
-  if (repoDirs.length === 0) {
-    let curr = path.resolve(cleanRoot)
-    for (let i = 0; i < 4; i++) {
-      const parent = path.dirname(curr)
-      if (!parent || parent === curr) break
-      curr = parent
+    function discover(dir, depth = 0) {
+      if (depth > 3 || repoDirs.length >= 60) return
+      let hasGit = false
+      let hasSvn = false
       try {
-        if (fs.existsSync(path.join(curr, '.git'))) {
-          addRepo(curr, 'git')
-          break
-        }
-        if (fs.existsSync(path.join(curr, '.svn'))) {
-          addRepo(curr, 'svn')
-          break
-        }
+        hasGit = fs.existsSync(path.join(dir, '.git'))
+        hasSvn = !hasGit && fs.existsSync(path.join(dir, '.svn'))
       } catch {}
+      if (hasGit || hasSvn) {
+        addRepo(dir, hasGit ? 'git' : 'svn')
+        return
+      }
+      let entries = []
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || ignoreDirs.has(entry.name) || entry.name.startsWith('.')) continue
+        discover(path.join(dir, entry.name), depth + 1)
+      }
+    }
+
+    discover(cleanRoot, 0)
+
+    // If the user selected a subdirectory inside a Git/SVN repository, walk up to find the enclosing repo root
+    if (repoDirs.length === 0) {
+      let curr = path.resolve(cleanRoot)
+      for (let i = 0; i < 4; i++) {
+        const parent = path.dirname(curr)
+        if (!parent || parent === curr) break
+        curr = parent
+        try {
+          if (fs.existsSync(path.join(curr, '.git'))) {
+            addRepo(curr, 'git')
+            break
+          }
+          if (fs.existsSync(path.join(curr, '.svn'))) {
+            addRepo(curr, 'svn')
+            break
+          }
+        } catch {}
+      }
     }
   }
 
-  const results = []
+  const results = new Array(repoDirs.length)
   const concurrency = 4
   let idx = 0
   const workers = Array.from({ length: Math.min(concurrency, repoDirs.length) }, async () => {
     while (idx < repoDirs.length) {
-      const item = repoDirs[idx++]
+      const myIdx = idx++
+      const item = repoDirs[myIdx]
       try {
         const info = await inspectPushWorkspace({ target: item.path })
-        results.push({
+        let remoteInfo = {
+          remoteSync: !info.url
+            ? 'no-remote'
+            : checkRemote
+              ? 'checking'
+              : (info.behind > 0 && info.ahead > 0 ? 'diverged' : info.behind > 0 ? 'behind' : info.ahead > 0 ? 'ahead' : 'checking'),
+          localHash: info.localHash || '',
+          remoteHash: '',
+          ahead: info.ahead || 0,
+          behind: info.behind || 0
+        }
+        if (checkRemote && info.url) {
+          remoteInfo = await checkRepoRemoteSync(item.path, info)
+        }
+        results[myIdx] = {
           id: item.path,
           name: item.name,
           target: item.path,
           provider: info.provider || item.provider,
           branch: info.branch || (item.provider === 'svn' ? `r${info.revision || 'HEAD'}` : 'main'),
+          isDetached: Boolean(info.isDetached),
           url: info.url || '',
           changesCount: info.changes?.length || 0,
-          ahead: info.ahead || 0,
-          behind: info.behind || 0,
+          ahead: remoteInfo.ahead,
+          behind: remoteInfo.behind,
+          remoteSync: remoteInfo.remoteSync,
+          localHash: remoteInfo.localHash,
+          remoteHash: remoteInfo.remoteHash,
           lastCommit: info.lastCommit || ''
-        })
+        }
       } catch {
-        results.push({
+        results[myIdx] = {
           id: item.path,
           name: item.name,
           target: item.path,
           provider: item.provider,
           branch: 'HEAD',
+          isDetached: false,
           url: '',
           changesCount: 0,
           ahead: 0,
           behind: 0,
+          remoteSync: 'no-remote',
+          localHash: '',
+          remoteHash: '',
           lastCommit: ''
-        })
+        }
       }
     }
   })
   await Promise.all(workers)
-  return { rootDir: cleanRoot, repos: results, repositories: results }
+  const finalRepos = results.filter(Boolean)
+  return { rootDir: cleanRoot, repos: finalRepos, repositories: finalRepos }
 }
 
 function formatReleaseBytes(bytes) {
@@ -1503,7 +1707,7 @@ async function publishReleaseTask(jobId, payload) {
   sendTaskEvent({ type: 'step', jobId, value: 4, label: '正在校验仓库信息与发布凭据...' })
 
   const tagName = String(rawTag || '').trim()
-  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.2）。')
+  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.3）。')
   const releaseTitle = String(rawTitle || '').trim() || tagName
   const releaseNotes = String(rawNotes || '').trim()
   const targetCommitish = String(rawCommitish || '').trim() || 'main'

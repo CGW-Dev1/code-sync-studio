@@ -550,8 +550,8 @@ function App() {
   // 版本发布状态 (mode === 'release')
   const [releaseTarget, setReleaseTarget] = useState(() => localStorage.getItem('code-sync-release-target') || localStorage.getItem('code-sync-push-target') || '')
   const [releaseRemoteUrl, setReleaseRemoteUrl] = useState(() => localStorage.getItem('code-sync-release-remote') || '')
-  const [releaseTag, setReleaseTag] = useState('v1.4.2')
-  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.2')
+  const [releaseTag, setReleaseTag] = useState('v1.4.3')
+  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.3')
   const [releaseBranch, setReleaseBranch] = useState('main')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseToken, setReleaseToken] = useState('')
@@ -1807,9 +1807,30 @@ function App() {
     if (!api?.scanLocalRepos) return
     setWorkspaceScanning(true)
     try {
-      const res = await api.scanLocalRepos({ rootDir: cleanDir })
+      const res = await api.scanLocalRepos({ rootDir: cleanDir, checkRemote: false })
       const list = res?.repos || res?.repositories || []
       setWorkspaceRepos(list)
+      setWorkspaceScanning(false)
+      if (list.length > 0) {
+        const remoteRes = await api.scanLocalRepos({
+          rootDir: cleanDir,
+          checkRemote: true,
+          targets: list.map((r) => ({ target: r.target, provider: r.provider }))
+        })
+        const remoteList = remoteRes?.repos || remoteRes?.repositories || []
+        if (remoteList.length > 0) {
+          setWorkspaceRepos(remoteList)
+          if (!silent) {
+            const needUpdate = remoteList.filter((r) => r.remoteSync === 'behind' || r.remoteSync === 'diverged' || r.behind > 0).length
+            showToast(
+              needUpdate > 0
+                ? `扫描完成：共 ${remoteList.length} 个仓库，发现 ${needUpdate} 个有远程新版本待更新`
+                : `扫描完成：共 ${remoteList.length} 个仓库，本地与远程最新版本均一致`
+            )
+          }
+          return
+        }
+      }
       if (!silent) {
         showToast(`扫描完成：共发现 ${list.length} 个本地仓库`)
       }
@@ -1956,7 +1977,7 @@ function App() {
   }
 
   function generateReleaseChangelog() {
-    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.2'
+    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.3'
     const commits = releaseWorkspace?.recentCommits || '- 新增：常规功能升级与细节体验优化'
     const assetSection = releaseAssets.length > 0
       ? `\n### 📦 发行版附件\n${releaseAssets.map((a) => `- \`${a.uploadName || a.name}\` (${formatFileSize(a.size)})`).join('\n')}\n`
@@ -1968,7 +1989,7 @@ function App() {
   async function runReleaseTask() {
     if (running || batchRunning || pushRunning || releaseRunning) return
     if (!releaseRemoteUrl.trim()) return showToast('请先填写远程 GitHub / Gitee 仓库地址')
-    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.2）')
+    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.3）')
     if (!api) return showToast('任务执行需要在桌面版中运行')
 
     setReleaseRunning(true)
@@ -2309,7 +2330,7 @@ function App() {
           <div className="brand-mark" title="CodeSync Studio">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
-          <span className="brand-badge">v1.4.2</span>
+          <span className="brand-badge">v1.4.3</span>
         </div>
 
         <nav className="side-nav">
@@ -4470,8 +4491,9 @@ function WorkspacePanel({
     return repos.filter((r) => {
       if (typeFilter === 'git' && r.provider !== 'git') return false
       if (typeFilter === 'svn' && r.provider !== 'svn') return false
+      if (typeFilter === 'behind' && !(r.remoteSync === 'behind' || r.remoteSync === 'diverged' || r.behind > 0 || r.remoteSync === 'detached')) return false
       if (typeFilter === 'dirty' && !(r.changesCount > 0)) return false
-      if (typeFilter === 'ahead' && !(r.ahead > 0)) return false
+      if (typeFilter === 'ahead' && !(r.ahead > 0 || r.remoteSync === 'ahead')) return false
       if (!filter.trim()) return true
       const q = filter.toLowerCase().trim()
       return (
@@ -4485,8 +4507,9 @@ function WorkspacePanel({
 
   const gitCount = repos.filter((r) => r.provider === 'git').length
   const svnCount = repos.filter((r) => r.provider === 'svn').length
+  const needUpdateCount = repos.filter((r) => r.remoteSync === 'behind' || r.remoteSync === 'diverged' || r.behind > 0 || r.remoteSync === 'detached').length
   const dirtyCount = repos.filter((r) => r.changesCount > 0).length
-  const aheadCount = repos.filter((r) => r.ahead > 0).length
+  const aheadCount = repos.filter((r) => r.ahead > 0 || r.remoteSync === 'ahead').length
 
   return (
     <section className="history-layout workspace-layout">
@@ -4551,6 +4574,13 @@ function WorkspacePanel({
               </button>
               <button
                 type="button"
+                className={`history-filter-pill ${typeFilter === 'behind' ? 'active' : ''} ${needUpdateCount > 0 ? 'has-alert' : ''}`}
+                onClick={() => setTypeFilter('behind')}
+              >
+                需更新 ({needUpdateCount})
+              </button>
+              <button
+                type="button"
                 className={`history-filter-pill ${typeFilter === 'dirty' ? 'active' : ''}`}
                 onClick={() => setTypeFilter('dirty')}
               >
@@ -4588,6 +4618,7 @@ function WorkspacePanel({
             <span>仓库名称</span>
             <span>当前分支 / 修订</span>
             <span>工作区状态</span>
+            <span>远程同步状态</span>
             <span>远程仓库地址</span>
             <span>本地路径</span>
             <span style={{ textAlign: 'center' }}>快捷操作</span>
@@ -4603,6 +4634,7 @@ function WorkspacePanel({
               filteredRepos.map((item, idx) => {
                 const upState = updatingMap[item.target]
                 const isUpdating = upState?.status === 'running'
+                const needsUpdate = item.remoteSync === 'behind' || item.remoteSync === 'diverged' || item.behind > 0 || item.remoteSync === 'detached'
                 return (
                   <div className="history-table-row workspace-table-row" key={item.target}>
                     <span className="history-col-index">#{idx + 1}</span>
@@ -4616,34 +4648,96 @@ function WorkspacePanel({
                       <b>{item.name}</b>
                     </span>
                     <span>
-                      <span className="history-version-badge">
+                      <span className="history-version-badge" title={item.isDetached ? `当前处于游离状态，主分支: ${item.branch}` : `当前分支: ${item.branch}`}>
                         <GitBranch size={11} />
                         {item.branch || 'HEAD'}
                       </span>
                     </span>
                     <div className="workspace-col-status">
                       {item.changesCount > 0 ? (
-                        <span className="workspace-status-pill dirty" title={`${item.changesCount} 个文件存在未提交改动`}>
+                        <span className="workspace-status-pill dirty" title={`${item.changesCount} 个本地文件存在未提交改动`}>
                           {item.changesCount} 项改动
                         </span>
                       ) : (
                         <span className="workspace-status-pill clean">干净</span>
                       )}
-                      {item.ahead > 0 && (
-                        <span className="workspace-status-pill ahead" title={`${item.ahead} 个本地提交待推送`}>
-                          ↑{item.ahead} 待推
-                        </span>
-                      )}
-                      {item.behind > 0 && (
-                        <span className="workspace-status-pill behind" title={`落后远程 ${item.behind} 个提交`}>
-                          ↓{item.behind} 落后
-                        </span>
-                      )}
-                      {upState?.status === 'success' && (
-                        <span className="workspace-status-pill synced">已更新</span>
-                      )}
                       {upState?.status === 'error' && (
                         <span className="workspace-status-pill dirty" title={upState.message}>失败</span>
+                      )}
+                    </div>
+                    <div className="workspace-col-remote-sync">
+                      {isUpdating ? (
+                        <span className="workspace-status-pill checking">
+                          <LoaderCircle size={10} className="spin" /> 正在同步远程...
+                        </span>
+                      ) : item.remoteSync === 'checking' ? (
+                        <span className="workspace-status-pill checking" title="正在对比本地提交与远程分支最新提交...">
+                          <LoaderCircle size={10} className="spin" /> 检测远程...
+                        </span>
+                      ) : item.remoteSync === 'behind' || (item.behind > 0 && !(item.ahead > 0)) ? (
+                        <>
+                          <span
+                            className="workspace-status-pill need-update"
+                            title={`远程分支有新版本！本地 (${item.localHash || '-'}) 落后远程 (${item.remoteHash || '-'}) ${item.behind || 1} 个提交，建议点击右侧「更新」`}
+                          >
+                            <Download size={10} /> 需更新{item.behind > 0 ? ` · 落后 ${item.behind}` : ''}
+                          </span>
+                          {(item.localHash || item.remoteHash) && (
+                            <span className="workspace-hash-tag diff" title={`本地最新: ${item.localHash || '?'} → 远程最新: ${item.remoteHash || '?'}`}>
+                              {item.localHash || '?'} → {item.remoteHash || '?'}
+                            </span>
+                          )}
+                        </>
+                      ) : item.remoteSync === 'diverged' || (item.behind > 0 && item.ahead > 0) ? (
+                        <>
+                          <span
+                            className="workspace-status-pill need-update"
+                            title={`本地超前 ${item.ahead} 个提交且落后远程 ${item.behind} 个提交 (本地: ${item.localHash || '-'} / 远程: ${item.remoteHash || '-'})`}
+                          >
+                            ⇅ 需同步 (↓{item.behind} ↑{item.ahead})
+                          </span>
+                        </>
+                      ) : item.remoteSync === 'ahead' || item.ahead > 0 ? (
+                        <>
+                          <span
+                            className="workspace-status-pill ahead"
+                            title={`本地比远程分支超前 ${item.ahead || 1} 个提交 (本地: ${item.localHash || '-'} / 远程: ${item.remoteHash || '-'})，可点击「推送」上传`}
+                          >
+                            <Upload size={10} /> 待推送 · 超前 {item.ahead || 1}
+                          </span>
+                          {item.localHash && (
+                            <span className="workspace-hash-tag" title={`本地最新提交: ${item.lastCommit || item.localHash}`}>
+                              {item.localHash}
+                            </span>
+                          )}
+                        </>
+                      ) : item.remoteSync === 'detached' ? (
+                        <span
+                          className="workspace-status-pill dirty"
+                          title="本地仓库处于游离分支 (Detached HEAD)，点击右侧「更新」可自动切回默认主线并同步最新代码"
+                        >
+                          游离分支 · 需切回主线
+                        </span>
+                      ) : item.remoteSync === 'synced' ? (
+                        <>
+                          <span
+                            className="workspace-status-pill synced"
+                            title={`本地提交 (${item.localHash || 'HEAD'}) 与远程分支 (${item.remoteHash || item.branch}) 最新内容完全一致，无需更新`}
+                          >
+                            <Check size={10} /> 与远程一致
+                          </span>
+                          {item.localHash && (
+                            <span className="workspace-hash-tag" title={`最新提交: ${item.lastCommit || item.localHash}`}>
+                              {item.localHash}
+                            </span>
+                          )}
+                        </>
+                      ) : item.remoteSync === 'no-remote' ? (
+                        <span className="workspace-status-pill clean">未配置远程</span>
+                      ) : (
+                        <span className="workspace-status-pill clean" title="暂时无法连接远程仓库获取最新哈希">
+                          远程未响应
+                        </span>
                       )}
                     </div>
                     <span className="history-col-url" title={item.url || '未配置远程地址'}>
@@ -4659,10 +4753,10 @@ function WorkspacePanel({
                     <div className="history-col-actions workspace-col-actions">
                       <button
                         type="button"
-                        className="workspace-action-btn"
+                        className={`workspace-action-btn ${needsUpdate ? 'needs-update' : ''}`}
                         onClick={() => onUpdateSingle(item)}
                         disabled={isUpdating || batchUpdating}
-                        title="立即拉取更新该仓库"
+                        title={needsUpdate ? '检测到远程有新版本，点击立即拉取更新' : '立即拉取更新该仓库'}
                       >
                         {isUpdating ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}
                         <span>更新</span>
@@ -5184,7 +5278,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTag}
                 onChange={(e) => setReleaseTag(e.target.value)}
-                placeholder="v1.4.2"
+                placeholder="v1.4.3"
                 disabled={releaseRunning}
               />
             </div>
@@ -5233,7 +5327,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTitle}
                 onChange={(e) => setReleaseTitle(e.target.value)}
-                placeholder="CodeSync Studio v1.4.2"
+                placeholder="CodeSync Studio v1.4.3"
                 disabled={releaseRunning}
               />
             </div>
