@@ -550,8 +550,8 @@ function App() {
   // 版本发布状态 (mode === 'release')
   const [releaseTarget, setReleaseTarget] = useState(() => localStorage.getItem('code-sync-release-target') || localStorage.getItem('code-sync-push-target') || '')
   const [releaseRemoteUrl, setReleaseRemoteUrl] = useState(() => localStorage.getItem('code-sync-release-remote') || '')
-  const [releaseTag, setReleaseTag] = useState('v1.4.3')
-  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.3')
+  const [releaseTag, setReleaseTag] = useState('v1.4.4')
+  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.4')
   const [releaseBranch, setReleaseBranch] = useState('main')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseToken, setReleaseToken] = useState('')
@@ -1308,7 +1308,7 @@ function App() {
         recurseSubmodules: provider === 'git' && action === 'pull' ? recurseSubmodules : false
       })
       setProgress((current) => ({ ...current, value: 100, status: 'success', label: '任务完成' }))
-      const entry = {
+      recordRecentEntry({
         id: Date.now(),
         provider,
         action,
@@ -1317,10 +1317,7 @@ function App() {
         url: provider === 'svn' ? (payloadVersion.sourceUrl || url) : url,
         time: new Date().toISOString(),
         ok: true
-      }
-      const next = [entry, ...recent.filter((item) => item.target !== target)].slice(0, 10)
-      setRecent(next)
-      localStorage.setItem('code-sync-recent', JSON.stringify(next))
+      })
     } catch (error) {
       setProgress((current) => ({ ...current, status: 'error', label: appError(error) }))
       setToast(appError(error))
@@ -1328,6 +1325,19 @@ function App() {
     } finally {
       setRunning(false)
     }
+  }
+
+  function recordRecentEntry(entry) {
+    setRecent((currentRecent) => {
+      const next = [
+        entry,
+        ...currentRecent.filter(
+          (r) => !(r.target === entry.target && r.action === entry.action && (entry.action !== 'release' || r.version === entry.version))
+        )
+      ].slice(0, 50)
+      localStorage.setItem('code-sync-recent', JSON.stringify(next))
+      return next
+    })
   }
 
   async function cancelTask() {
@@ -1513,7 +1523,7 @@ function App() {
         setBatchItemStatuses((prev) => ({ ...prev, [item.id]: { status: 'success', error: '' } }))
         successCount++
 
-        const entry = {
+        recordRecentEntry({
           id: Date.now() + i,
           provider: batchProvider,
           action: taskAction,
@@ -1522,11 +1532,6 @@ function App() {
           url: finalUrl,
           time: new Date().toISOString(),
           ok: true
-        }
-        setRecent((currentRecent) => {
-          const next = [entry, ...currentRecent.filter((r) => r.target !== item.target)].slice(0, 10)
-          localStorage.setItem('code-sync-recent', JSON.stringify(next))
-          return next
         })
 
         setBatchProgress((prev) => ({
@@ -1639,6 +1644,16 @@ function App() {
         target: targetItem.target,
         version: payloadVersion,
         path: sparsePath || ''
+      })
+      recordRecentEntry({
+        id: Date.now(),
+        provider: batchProvider,
+        action: taskAction,
+        version: payloadVersion.label || payloadVersion.name || 'HEAD',
+        target: targetItem.target,
+        url: finalUrl,
+        time: new Date().toISOString(),
+        ok: true
       })
       setBatchItemStatuses((prev) => ({ ...prev, [targetItem.id]: { status: 'success', error: '', action: taskAction } }))
       showToast(`${targetItem.name} ${taskAction === 'pull' ? '拉取' : '更新'}成功`)
@@ -1872,6 +1887,16 @@ function App() {
           ? { kind: 'branch', name: repoItem.branch === 'HEAD' ? '' : (repoItem.branch || ''), label: repoItem.branch || 'HEAD' }
           : { kind: 'svn', revision: 'HEAD', sourceUrl: repoItem.url || '' }
       })
+      recordRecentEntry({
+        id: Date.now(),
+        provider: repoItem.provider || 'git',
+        action: 'update',
+        version: repoItem.branch || 'HEAD',
+        target: repoItem.target,
+        url: repoItem.url || '',
+        time: new Date().toISOString(),
+        ok: true
+      })
       setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'success', message: '已更新' } }))
       showToast(`${repoItem.name} 已更新至最新`)
       await scanWorkspaceNow(workspaceRoot, true)
@@ -1890,7 +1915,8 @@ function App() {
     showToast(`开始批量更新 ${reposToUpdate.length} 个本地仓库...`)
     let okCount = 0
     let failCount = 0
-    for (const repoItem of reposToUpdate) {
+    for (let i = 0; i < reposToUpdate.length; i++) {
+      const repoItem = reposToUpdate[i]
       setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'running', message: '更新中' } }))
       try {
         await api.runTask({
@@ -1903,6 +1929,16 @@ function App() {
             : { kind: 'svn', revision: 'HEAD', sourceUrl: repoItem.url || '' }
         })
         okCount++
+        recordRecentEntry({
+          id: Date.now() + i,
+          provider: repoItem.provider || 'git',
+          action: 'update',
+          version: repoItem.branch || 'HEAD',
+          target: repoItem.target,
+          url: repoItem.url || '',
+          time: new Date().toISOString(),
+          ok: true
+        })
         setWorkspaceUpdatingMap((prev) => ({ ...prev, [repoItem.target]: { status: 'success', message: '已更新' } }))
       } catch (err) {
         failCount++
@@ -1977,7 +2013,7 @@ function App() {
   }
 
   function generateReleaseChangelog() {
-    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.3'
+    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.4'
     const commits = releaseWorkspace?.recentCommits || '- 新增：常规功能升级与细节体验优化'
     const assetSection = releaseAssets.length > 0
       ? `\n### 📦 发行版附件\n${releaseAssets.map((a) => `- \`${a.uploadName || a.name}\` (${formatFileSize(a.size)})`).join('\n')}\n`
@@ -1989,7 +2025,7 @@ function App() {
   async function runReleaseTask() {
     if (running || batchRunning || pushRunning || releaseRunning) return
     if (!releaseRemoteUrl.trim()) return showToast('请先填写远程 GitHub / Gitee 仓库地址')
-    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.3）')
+    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.4）')
     if (!api) return showToast('任务执行需要在桌面版中运行')
 
     setReleaseRunning(true)
@@ -2052,7 +2088,7 @@ function App() {
         return next
       })
 
-      const entry = {
+      recordRecentEntry({
         id: Date.now(),
         provider: 'git',
         action: 'release',
@@ -2061,11 +2097,6 @@ function App() {
         url: releaseRemoteUrl.trim(),
         time: new Date().toISOString(),
         ok: true
-      }
-      setRecent((currentRecent) => {
-        const next = [entry, ...currentRecent.filter((r) => !(r.url === entry.url && r.version === entry.version && r.action === 'release'))].slice(0, 10)
-        localStorage.setItem('code-sync-recent', JSON.stringify(next))
-        return next
       })
 
       showToast(`🎉 Release ${releaseTag.trim()} 已成功发布！`)
@@ -2136,7 +2167,7 @@ function App() {
         autoInit: true
       })
 
-      const entry = {
+      recordRecentEntry({
         id: Date.now(),
         provider: pushProvider,
         action: 'push',
@@ -2145,11 +2176,6 @@ function App() {
         url: finalRemoteUrl,
         time: new Date().toISOString(),
         ok: true
-      }
-      setRecent((currentRecent) => {
-        const next = [entry, ...currentRecent.filter((r) => !(r.target === entry.target && r.action === 'push'))].slice(0, 10)
-        localStorage.setItem('code-sync-recent', JSON.stringify(next))
-        return next
       })
 
       setPushProgress((current) => ({
@@ -2330,7 +2356,7 @@ function App() {
           <div className="brand-mark" title="CodeSync Studio">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
-          <span className="brand-badge">v1.4.3</span>
+          <span className="brand-badge">v1.4.4</span>
         </div>
 
         <nav className="side-nav">
@@ -5278,7 +5304,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTag}
                 onChange={(e) => setReleaseTag(e.target.value)}
-                placeholder="v1.4.3"
+                placeholder="v1.4.4"
                 disabled={releaseRunning}
               />
             </div>
@@ -5327,7 +5353,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTitle}
                 onChange={(e) => setReleaseTitle(e.target.value)}
-                placeholder="CodeSync Studio v1.4.3"
+                placeholder="CodeSync Studio v1.4.4"
                 disabled={releaseRunning}
               />
             </div>
