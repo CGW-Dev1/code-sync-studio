@@ -722,9 +722,54 @@ async function inspectPushWorkspace({ target }) {
           displayPath: rawPath,
           status,
           label,
-          staged: xy[0] !== ' ' && xy[0] !== '?'
+          staged: xy[0] !== ' ' && xy[0] !== '?',
+          committed: false
         }
       })
+
+    if (ahead > 0) {
+      let aheadDiffOut = ''
+      try {
+        const res = await capture('git', ['-C', cleanTarget, 'diff', '--name-status', '@{u}..HEAD'], cleanTarget)
+        aheadDiffOut = res.stdout
+      } catch {
+        try {
+          const res = await capture('git', ['-C', cleanTarget, 'diff', '--name-status', `origin/${branch}..HEAD`], cleanTarget)
+          aheadDiffOut = res.stdout
+        } catch {
+          try {
+            const res = await capture('git', ['-C', cleanTarget, 'diff', '--name-status', `HEAD~${ahead}..HEAD`], cleanTarget)
+            aheadDiffOut = res.stdout
+          } catch {}
+        }
+      }
+      const existingPaths = new Set(changes.map((c) => c.path))
+      aheadDiffOut
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .forEach((line) => {
+          const parts = line.split(/\t+/)
+          if (parts.length < 2) return
+          const code = parts[0].charAt(0).toUpperCase()
+          const filePath = parts[parts.length - 1].replace(/^"+|"+$/g, '')
+          if (!filePath || existingPaths.has(filePath)) return
+          existingPaths.add(filePath)
+          let status = 'M'
+          let label = '已修改'
+          if (code === 'A') { status = 'A'; label = '新增' }
+          else if (code === 'D') { status = 'D'; label = '已删除' }
+          else if (code === 'R') { status = 'R'; label = '重命名' }
+          changes.push({
+            path: filePath,
+            displayPath: filePath,
+            status,
+            label,
+            staged: true,
+            committed: true
+          })
+        })
+    }
 
     return {
       provider: 'git',
@@ -805,6 +850,15 @@ async function getWorkspaceDiff({ provider, target, filePath }) {
   if (filePath) args.push('--', filePath)
   const res = await capture('git', args, cleanTarget).catch(() => ({ stdout: '' }))
   let diffText = stripAnsi(res.stdout || '').trim()
+  if (!diffText && filePath) {
+    // Try unpushed commits diff (@{u}..HEAD or HEAD~1..HEAD)
+    const upRes = await capture('git', ['-c', 'core.quotePath=false', '-C', cleanTarget, 'diff', '@{u}..HEAD', '--', filePath], cleanTarget).catch(() => ({ stdout: '' }))
+    diffText = stripAnsi(upRes.stdout || '').trim()
+  }
+  if (!diffText && filePath) {
+    const showRes = await capture('git', ['-c', 'core.quotePath=false', '-C', cleanTarget, 'show', 'HEAD', '--format=', '--', filePath], cleanTarget).catch(() => ({ stdout: '' }))
+    diffText = stripAnsi(showRes.stdout || '').trim()
+  }
   if (!diffText && filePath) {
     const full = path.join(cleanTarget, filePath)
     if (fs.existsSync(full) && fs.statSync(full).isFile()) {
@@ -1784,17 +1838,20 @@ async function runTask(payload) {
       }
 
       if (commitChanges !== false) {
-        if (Array.isArray(selectedFiles)) {
-          if (selectedFiles.length > 0) {
-            await capture('git', ['-C', target, 'reset'], target).catch(() => {})
-            const chunkSize = 40
-            for (let i = 0; i < selectedFiles.length; i += chunkSize) {
-              const chunk = selectedFiles.slice(i, i + chunkSize)
-              await runStep(jobId, `暂存已选改动文件 (${Math.min(i + chunk.length, selectedFiles.length)}/${selectedFiles.length})`, 'git', ['-C', target, 'add', '-A', '--', ...chunk], target, 36, 52, taskOptions)
+        const workingStatus = (await capture('git', ['-C', target, 'status', '--porcelain=v1', '-uall'], target).catch(() => ({ stdout: '' }))).stdout.trim()
+        if (workingStatus) {
+          if (Array.isArray(selectedFiles)) {
+            if (selectedFiles.length > 0) {
+              await capture('git', ['-C', target, 'reset'], target).catch(() => {})
+              const chunkSize = 40
+              for (let i = 0; i < selectedFiles.length; i += chunkSize) {
+                const chunk = selectedFiles.slice(i, i + chunkSize)
+                await runStep(jobId, `暂存已选改动文件 (${Math.min(i + chunk.length, selectedFiles.length)}/${selectedFiles.length})`, 'git', ['-C', target, 'add', '-A', '--', ...chunk], target, 36, 52, taskOptions)
+              }
             }
+          } else {
+            await runStep(jobId, '暂存工作区全部改动 (git add -A)', 'git', ['-C', target, 'add', '-A'], target, 36, 52, taskOptions)
           }
-        } else {
-          await runStep(jobId, '暂存工作区全部改动 (git add -A)', 'git', ['-C', target, 'add', '-A'], target, 36, 52, taskOptions)
         }
 
         const stagedDiff = await capture('git', ['-C', target, 'diff', '--cached', '--name-only'], target).catch(() => ({ stdout: '' }))

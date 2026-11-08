@@ -4201,7 +4201,11 @@ function PushTaskPanel({
                   {item.displayPath}
                 </span>
                 <div className="push-row-actions" onClick={(e) => e.stopPropagation()}>
-                  {item.staged && <span className="push-stage-tag">已暂存</span>}
+                  {item.committed ? (
+                    <span className="push-stage-tag">待推提交</span>
+                  ) : (
+                    item.staged && <span className="push-stage-tag">已暂存</span>
+                  )}
                   <button
                     type="button"
                     className="batch-subdir-btn"
