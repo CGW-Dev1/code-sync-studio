@@ -550,8 +550,8 @@ function App() {
   // 版本发布状态 (mode === 'release')
   const [releaseTarget, setReleaseTarget] = useState(() => localStorage.getItem('code-sync-release-target') || localStorage.getItem('code-sync-push-target') || '')
   const [releaseRemoteUrl, setReleaseRemoteUrl] = useState(() => localStorage.getItem('code-sync-release-remote') || '')
-  const [releaseTag, setReleaseTag] = useState('v1.4.4')
-  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.4')
+  const [releaseTag, setReleaseTag] = useState('v1.4.5')
+  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.5')
   const [releaseBranch, setReleaseBranch] = useState('main')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseToken, setReleaseToken] = useState('')
@@ -1252,7 +1252,11 @@ function App() {
       const clean = (text || '').trim().split(/\r?\n/)[0]?.trim() || ''
       if (!clean) return showToast('剪贴板为空')
       handleSetUrl(clean)
-      if (/^svn(?:\+[a-z]+)?:\/\//i.test(clean) || /\/trunk\/?$/i.test(clean)) {
+      if (
+        /^svn(?:\+[a-z]+)?:\/\//i.test(clean) ||
+        /\/(?:trunk|branches|tags)(?:\/|$)/i.test(clean) ||
+        /\/(?:trunk|branches|tags)\/?$/i.test(clean)
+      ) {
         setProvider('svn')
       } else if (/^git@/i.test(clean) || /\.git$/i.test(clean)) {
         setProvider('git')
@@ -2013,7 +2017,7 @@ function App() {
   }
 
   function generateReleaseChangelog() {
-    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.4'
+    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.5'
     const commits = releaseWorkspace?.recentCommits || '- 新增：常规功能升级与细节体验优化'
     const assetSection = releaseAssets.length > 0
       ? `\n### 📦 发行版附件\n${releaseAssets.map((a) => `- \`${a.uploadName || a.name}\` (${formatFileSize(a.size)})`).join('\n')}\n`
@@ -2025,7 +2029,7 @@ function App() {
   async function runReleaseTask() {
     if (running || batchRunning || pushRunning || releaseRunning) return
     if (!releaseRemoteUrl.trim()) return showToast('请先填写远程 GitHub / Gitee 仓库地址')
-    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.4）')
+    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.5）')
     if (!api) return showToast('任务执行需要在桌面版中运行')
 
     setReleaseRunning(true)
@@ -2356,7 +2360,7 @@ function App() {
           <div className="brand-mark" title="CodeSync Studio">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
-          <span className="brand-badge">v1.4.4</span>
+          <span className="brand-badge">v1.4.5</span>
         </div>
 
         <nav className="side-nav">
@@ -2560,7 +2564,18 @@ function App() {
                       <input
                         id="repo-url"
                         value={url}
-                        onChange={(event) => handleSetUrl(event.target.value)}
+                        onChange={(event) => {
+                          const val = event.target.value
+                          handleSetUrl(val)
+                          if (
+                            /^svn(?:\+[a-z]+)?:\/\//i.test(val) ||
+                            /\/(?:trunk|branches|tags)(?:\/|$)/i.test(val)
+                          ) {
+                            setProvider('svn')
+                          } else if (/^git@/i.test(val) || /\.git$/i.test(val)) {
+                            setProvider('git')
+                          }
+                        }}
                         onKeyDown={(event) => { if (event.key === 'Enter') probe() }}
                         placeholder={provider === 'git' ? 'https://github.com/org/repo.git 或 git@...' : 'https://svn.example.com/svn/project/trunk'}
                       />
@@ -2747,8 +2762,9 @@ function App() {
                         <label className="field-title">最近同步快捷载入</label>
                         <button
                           type="button"
+                          className="batch-text-btn"
                           onClick={() => setMode('history')}
-                          style={{ fontSize: 11, color: 'var(--cyan-primary)', background: 'transparent', padding: 0 }}
+                          style={{ height: 20, padding: '0 7px', fontSize: 10.5 }}
                         >
                           全部 ({recent.length})
                         </button>
@@ -3304,7 +3320,7 @@ function BatchSyncPanel({
               <button type="button" className="batch-text-btn" onClick={onCleanUrls} disabled={batchRunning || !currentUrls.trim()} title="去除空行与重复链接"><RefreshCw size={11} />去重</button>
               <button type="button" className="batch-text-btn" onClick={onCopyUrls} disabled={!currentUrls.trim()} title="复制当前全部链接"><Copy size={11} />复制</button>
             </div>
-            <button type="button" className="batch-text-btn" onClick={onClearUrls} disabled={batchRunning || !currentUrls.trim()} style={{ color: 'var(--crimson-text)' }} title="清空列表"><Trash2 size={11} />清空</button>
+            <button type="button" className="batch-text-btn danger" onClick={onClearUrls} disabled={batchRunning || !currentUrls.trim()} title="清空列表"><Trash2 size={11} />清空</button>
           </div>
           {protocolWarning && (
             <div className="batch-alert warning">
@@ -3443,9 +3459,10 @@ function BatchSyncPanel({
                 <label className="field-title" htmlFor="batch-git-branch">全局默认分支</label>
                 <button
                   type="button"
+                  className="batch-text-btn"
                   onClick={onApplyGlobalBranch}
                   disabled={batchRunning || !batchGitBranch.trim()}
-                  style={{ fontSize: 11, color: 'var(--cyan-primary)', background: 'transparent', padding: 0 }}
+                  style={{ height: 20, padding: '0 7px', fontSize: 10.5 }}
                 >
                   应用全部
                 </button>
@@ -4020,8 +4037,9 @@ function PushSyncPanel({
         <div className="field-group">
           <div className="label-row">
             <label className="field-title" htmlFor="push-remote-url">
-              {pushProvider === 'git' ? '远程 Git 仓库地址 (origin)' : '远程 SVN 仓库地址'}
+              远程 Git 仓库地址 (origin)
             </label>
+            <span>填写目标仓库，提交时自动关联</span>
           </div>
           <div className="input-with-icon">
             <Upload size={15} />
@@ -4029,21 +4047,65 @@ function PushSyncPanel({
               id="push-remote-url"
               value={pushRemoteUrl}
               onChange={(e) => setPushRemoteUrl(e.target.value)}
-              disabled={pushRunning || pushProvider === 'svn'}
-              placeholder={
-                pushProvider === 'git'
-                  ? 'https://github.com/org/repo.git 或 git@github.com:org/repo.git'
-                  : '选择本地 SVN 目录后自动显示关联地址'
-              }
+              disabled={pushRunning}
+              placeholder="https://github.com/org/repo.git 或 git@github.com:org/repo.git"
             />
           </div>
         </div>
+
+        {pushProvider === 'git' && (
+          <div className="field-group">
+            <div className="label-row">
+              <label className="field-title">推送策略</label>
+              <span>按需开启，全部为可选组合</span>
+            </div>
+            <div className="push-strategy-pills">
+              <button
+                type="button"
+                className={`push-strategy-pill ${pushCommitChanges ? 'active' : ''}`}
+                onClick={() => setPushCommitChanges(!pushCommitChanges)}
+                disabled={pushRunning}
+                title="推送前自动暂存并提交已勾选的改动文件"
+              >
+                <Check size={11} />自动提交
+              </button>
+              <button
+                type="button"
+                className={`push-strategy-pill ${pushPullBeforePush ? 'active' : ''}`}
+                onClick={() => setPushPullBeforePush(!pushPullBeforePush)}
+                disabled={pushRunning || pushForce}
+                title="推送前先执行 git pull --rebase 同步远端提交，防止冲突"
+              >
+                <RefreshCw size={10} />先拉再推
+              </button>
+              <button
+                type="button"
+                className={`push-strategy-pill warning ${pushForce ? 'active' : ''}`}
+                onClick={() => setPushForce(!pushForce)}
+                disabled={pushRunning}
+                title="使用 --force-with-lease 安全强推"
+              >
+                <Zap size={11} />强推
+              </button>
+              <button
+                type="button"
+                className={`push-strategy-pill ${pushTags ? 'active' : ''}`}
+                onClick={() => setPushTags(!pushTags)}
+                disabled={pushRunning}
+                title="同时推送本地所有标签 (--tags)"
+              >
+                <GitCommitHorizontal size={11} />标签
+              </button>
+            </div>
+          </div>
+        )}
 
         {pushProvider === 'git' && (
           <div className="batch-options-grid">
             <div className="field-group" style={{ marginTop: 0 }}>
               <div className="label-row">
                 <label className="field-title" htmlFor="push-branch-input">推送分支</label>
+                <span>{pushWorkspace?.branch ? `当前: ${pushWorkspace.branch}` : '默认 main'}</span>
               </div>
               <div className="input-with-icon">
                 <GitBranch size={14} />
@@ -4076,45 +4138,21 @@ function PushSyncPanel({
 
             <div className="field-group" style={{ marginTop: 0 }}>
               <div className="label-row">
-                <label className="field-title">推送策略</label>
+                <label className="field-title">推送范围</label>
+                <span>{pushWorkspace?.ahead > 0 ? `本地待推 ${pushWorkspace.ahead} 提交` : '改动文件与提交'}</span>
               </div>
-              <div className="push-strategy-pills">
-                <button
-                  type="button"
-                  className={`push-strategy-pill ${pushCommitChanges ? 'active' : ''}`}
-                  onClick={() => setPushCommitChanges(!pushCommitChanges)}
-                  disabled={pushRunning}
-                  title="推送前自动暂存并提交已勾选的改动文件"
-                >
-                  <Check size={11} />自动提交
-                </button>
-                <button
-                  type="button"
-                  className={`push-strategy-pill ${pushPullBeforePush ? 'active' : ''}`}
-                  onClick={() => setPushPullBeforePush(!pushPullBeforePush)}
-                  disabled={pushRunning || pushForce}
-                  title="推送前先执行 git pull --rebase 同步远端提交，防止冲突"
-                >
-                  <RefreshCw size={10} />先拉再推
-                </button>
-                <button
-                  type="button"
-                  className={`push-strategy-pill warning ${pushForce ? 'active' : ''}`}
-                  onClick={() => setPushForce(!pushForce)}
-                  disabled={pushRunning}
-                  title="使用 --force-with-lease 安全强推"
-                >
-                  <Zap size={11} />强推
-                </button>
-                <button
-                  type="button"
-                  className={`push-strategy-pill ${pushTags ? 'active' : ''}`}
-                  onClick={() => setPushTags(!pushTags)}
-                  disabled={pushRunning}
-                  title="同时推送本地所有标签 (--tags)"
-                >
-                  <GitCommitHorizontal size={11} />标签
-                </button>
+              <div className="input-with-icon">
+                <Upload size={14} />
+                <input
+                  value={pushWorkspace?.parsedRepo ? `${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo}` : ''}
+                  readOnly
+                  tabIndex={-1}
+                  style={{ color: 'var(--cyan-bright)', cursor: 'default' }}
+                  placeholder="选择本地目录后自动识别远程仓库"
+                />
+                {pushWorkspace?.parsedRepo?.platform && (
+                  <span className="push-stage-tag" style={{ flexShrink: 0 }}>{pushWorkspace.parsedRepo.platform.toUpperCase()}</span>
+                )}
               </div>
             </div>
           </div>
@@ -4155,10 +4193,9 @@ function PushSyncPanel({
             </div>
             <button
               type="button"
-              className="batch-text-btn"
+              className="batch-text-btn danger"
               onClick={() => setPushCommitMsg('')}
               disabled={pushRunning || !pushCommitMsg}
-              style={{ color: 'var(--crimson-text)' }}
             >
               <Trash2 size={11} />清空
             </button>
@@ -5022,13 +5059,18 @@ function DirectoryBrowser({ entries, path, loading, error, selectedPath, onNavig
         ))}
       </div>
       {entries.length > 5 && (
-        <div style={{ padding: '4px 8px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div className="dir-search-bar">
+          <Search size={12} />
           <input
-            style={{ width: '100%', background: 'transparent', border: 0, color: 'var(--text-heading)', fontSize: '11px', outline: 'none' }}
             placeholder="搜索当前目录下文件/文件夹..."
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
           />
+          {filterText && (
+            <button type="button" className="dir-search-clear" onClick={() => setFilterText('')} title="清除搜索">
+              <X size={10} />
+            </button>
+          )}
         </div>
       )}
       <div className="dir-list">
@@ -5304,7 +5346,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTag}
                 onChange={(e) => setReleaseTag(e.target.value)}
-                placeholder="v1.4.4"
+                placeholder="v1.4.5"
                 disabled={releaseRunning}
               />
             </div>
@@ -5353,7 +5395,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTitle}
                 onChange={(e) => setReleaseTitle(e.target.value)}
-                placeholder="CodeSync Studio v1.4.4"
+                placeholder="CodeSync Studio v1.4.5"
                 disabled={releaseRunning}
               />
             </div>
@@ -5440,10 +5482,9 @@ function ReleaseSyncPanel({
             </div>
             <button
               type="button"
-              className="batch-text-btn"
+              className="batch-text-btn danger"
               onClick={() => setReleaseNotes('')}
               disabled={releaseRunning || !releaseNotes}
-              style={{ color: 'var(--crimson-text)' }}
             >
               <Trash2 size={11} />清空
             </button>
@@ -5547,7 +5588,6 @@ function ReleaseTaskPanel({
             className="batch-text-btn"
             onClick={onRescanAssets}
             disabled={running}
-            style={{ height: 24, padding: '0 8px' }}
             title="自动扫描项目目录下的打包产物"
           >
             <RefreshCw size={11} />
@@ -5556,10 +5596,9 @@ function ReleaseTaskPanel({
           {releaseAssets.length > 0 && (
             <button
               type="button"
-              className="batch-text-btn"
+              className="batch-text-btn danger"
               onClick={onClearAssets}
               disabled={running}
-              style={{ height: 24, padding: '0 8px', color: 'var(--crimson-text)' }}
               title="清空附件列表"
             >
               <Trash2 size={11} />

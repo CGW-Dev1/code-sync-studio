@@ -308,7 +308,7 @@ function createCommandSession(command, args, options = {}) {
 
   if (targetUrl && isPrivateOrLocalHost(targetUrl)) {
     if (command === 'git') {
-      preparedArgs.unshift('-c', 'http.proxy=')
+      preparedArgs.unshift('-c', 'http.proxy=', '-c', 'http.sslVerify=false')
     }
     delete env.HTTP_PROXY
     delete env.HTTPS_PROXY
@@ -811,7 +811,8 @@ async function inspectPushWorkspace({ target }) {
       localFullHash,
       localHash,
       lastCommit: formattedLastCommit,
-      changes
+      changes,
+      parsedRepo: parseGitRemoteRepo(url)
     }
   } catch {}
 
@@ -1707,7 +1708,7 @@ async function publishReleaseTask(jobId, payload) {
   sendTaskEvent({ type: 'step', jobId, value: 4, label: '正在校验仓库信息与发布凭据...' })
 
   const tagName = String(rawTag || '').trim()
-  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.4）。')
+  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.5）。')
   const releaseTitle = String(rawTitle || '').trim() || tagName
   const releaseNotes = String(rawNotes || '').trim()
   const targetCommitish = String(rawCommitish || '').trim() || 'main'
@@ -1972,7 +1973,30 @@ function runProcess(jobId, command, args, cwd, options = {}) {
           return
         }
       }
-      if (command === 'svn') return finish(reject, svnError(output, session.authSummary))
+      if (command === 'svn') {
+        if (
+          !options._retriedWithCleanup &&
+          /E155037|E155004|run 'cleanup'|working copy .* locked/i.test(output)
+        ) {
+          const cleanupDir = cwd || [...args].reverse().find((a) => typeof a === 'string' && !a.startsWith('-') && !/^https?:\/\/|^svn/i.test(a) && fs.existsSync(a))
+          if (cleanupDir) {
+            emitLine(jobId, `[提示] 检测到 SVN 工作副本存在未完成锁，正在自动执行 svn cleanup 清理并重试...`, 'stdout')
+            capture('svn', ['cleanup', cleanupDir], cleanupDir, options)
+              .catch(() => {})
+              .finally(() => {
+                runProcess(jobId, command, args, cwd, {
+                  ...options,
+                  _retriedWithCleanup: true
+                }).then(
+                  (res) => finish(resolve, res),
+                  (err) => finish(reject, err)
+                )
+              })
+            return
+          }
+        }
+        return finish(reject, svnError(output, session.authSummary))
+      }
       const authHint = session.authSummary ? `\n认证状态：${session.authSummary}` : ''
       finish(reject, new Error(`${output || `${command} 返回错误码 ${code}`}${authHint}`))
     })
