@@ -3141,16 +3141,17 @@ button:disabled {
 
 .inline-branch-picker {
   position: relative;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-xs);
-  background: rgba(255, 255, 255, 0.04);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-left: 2px;
   transition: all 0.15s ease;
 }
 
