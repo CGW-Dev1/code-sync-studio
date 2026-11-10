@@ -2764,7 +2764,6 @@ function App() {
                           type="button"
                           className="batch-text-btn"
                           onClick={() => setMode('history')}
-                          style={{ height: 20, padding: '0 7px', fontSize: 10.5 }}
                         >
                           全部 ({recent.length})
                         </button>
@@ -3462,7 +3461,6 @@ function BatchSyncPanel({
                   className="batch-text-btn"
                   onClick={onApplyGlobalBranch}
                   disabled={batchRunning || !batchGitBranch.trim()}
-                  style={{ height: 20, padding: '0 7px', fontSize: 10.5 }}
                 >
                   应用全部
                 </button>
@@ -3595,13 +3593,12 @@ function BatchTaskPanel({
       <div className="batch-queue-header">
         <span>待拉取仓库清单 (共 <b>{batchItems.length}</b> 个)</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div className="input-with-icon" style={{ height: 26, padding: '0 8px', fontSize: 11 }}>
+          <div className="input-with-icon batch-filter-input">
             <Filter size={11} />
             <input
               placeholder="过滤项目名/分支..."
               value={batchFilter}
               onChange={(e) => setBatchFilter(e.target.value)}
-              style={{ fontSize: 11 }}
             />
           </div>
           <button
@@ -3795,8 +3792,8 @@ function BatchTaskPanel({
             </span>
           </div>
           <div className="log-tools">
-            <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
-              <Filter size={10} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
+            <button type="button" className={onlyErrors ? 'active-error' : ''} onClick={() => setOnlyErrors(!onlyErrors)}>
+              <Filter size={11} />{onlyErrors ? '全部' : '仅错误'}
             </button>
             <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
               {autoScroll ? '锁定滚动' : '跟随滚动'}
@@ -4147,11 +4144,12 @@ function PushSyncPanel({
                   value={pushWorkspace?.parsedRepo ? `${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo}` : ''}
                   readOnly
                   tabIndex={-1}
-                  style={{ color: 'var(--cyan-bright)', cursor: 'default' }}
-                  placeholder="选择本地目录后自动识别远程仓库"
+                  className="readonly-repo-field"
+                  title={pushWorkspace?.parsedRepo ? `${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo} (${pushWorkspace.parsedRepo.platform})` : '选择本地目录后自动识别远程仓库'}
+                  placeholder="选择本地目录后自动识别"
                 />
                 {pushWorkspace?.parsedRepo?.platform && (
-                  <span className="push-stage-tag" style={{ flexShrink: 0 }}>{pushWorkspace.parsedRepo.platform.toUpperCase()}</span>
+                  <span className="push-stage-tag">{pushWorkspace.parsedRepo.platform.toUpperCase()}</span>
                 )}
               </div>
             </div>
@@ -4305,21 +4303,19 @@ function PushTaskPanel({
               className="batch-text-btn"
               onClick={toggleSelectAll}
               disabled={running}
-              style={{ height: 22, padding: '0 8px' }}
             >
-              <Check size={10} />
+              <Check size={11} />
               {allSelected ? '取消全选' : '全选'}
             </button>
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div className="input-with-icon" style={{ height: 26, padding: '0 8px', fontSize: 11 }}>
+          <div className="input-with-icon batch-filter-input">
             <Filter size={11} />
             <input
               placeholder="过滤文件..."
               value={pushFilter}
               onChange={(e) => setPushFilter(e.target.value)}
-              style={{ fontSize: 11 }}
             />
           </div>
           <button
@@ -4410,8 +4406,8 @@ function PushTaskPanel({
             </span>
           </div>
           <div className="log-tools">
-            <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
-              <Filter size={10} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
+            <button type="button" className={onlyErrors ? 'active-error' : ''} onClick={() => setOnlyErrors(!onlyErrors)}>
+              <Filter size={11} />{onlyErrors ? '全部' : '仅错误'}
             </button>
             <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
               {autoScroll ? '锁定滚动' : '跟随滚动'}
@@ -5196,8 +5192,8 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
       <div className="log-heading">
         <span><Terminal size={13} />终端输出</span>
         <div className="log-tools">
-          <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
-            <Filter size={11} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
+          <button type="button" className={onlyErrors ? 'active-error' : ''} onClick={() => setOnlyErrors(!onlyErrors)}>
+            <Filter size={11} />{onlyErrors ? '全部' : '仅错误'}
           </button>
           <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
             {autoScroll ? '锁定滚动' : '跟随滚动'}
@@ -5572,7 +5568,7 @@ function ReleaseTaskPanel({
     <div className={`batch-queue-container ${isSplit ? 'split-mode' : 'full-mode'}`}>
       <div className="batch-queue-header">
         <span>发行版附件 (<b>{releaseAssets.length}</b>)</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button
             type="button"
             className="batch-fetch-all-btn"
@@ -5701,8 +5697,8 @@ function ReleaseTaskPanel({
             </span>
           </div>
           <div className="log-tools">
-            <button type="button" onClick={() => setOnlyErrors(!onlyErrors)} style={{ color: onlyErrors ? 'var(--crimson-text)' : undefined }}>
-              <Filter size={10} style={{ display: 'inline', marginRight: 3 }} />{onlyErrors ? '全部' : '仅错误'}
+            <button type="button" className={onlyErrors ? 'active-error' : ''} onClick={() => setOnlyErrors(!onlyErrors)}>
+              <Filter size={11} />{onlyErrors ? '全部' : '仅错误'}
             </button>
             <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
               {autoScroll ? '锁定滚动' : '跟随滚动'}
