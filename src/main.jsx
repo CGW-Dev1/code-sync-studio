@@ -550,8 +550,8 @@ function App() {
   // 版本发布状态 (mode === 'release')
   const [releaseTarget, setReleaseTarget] = useState(() => localStorage.getItem('code-sync-release-target') || localStorage.getItem('code-sync-push-target') || '')
   const [releaseRemoteUrl, setReleaseRemoteUrl] = useState(() => localStorage.getItem('code-sync-release-remote') || '')
-  const [releaseTag, setReleaseTag] = useState('v1.4.6')
-  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.6')
+  const [releaseTag, setReleaseTag] = useState('v1.4.5')
+  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.5')
   const [releaseBranch, setReleaseBranch] = useState('main')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseToken, setReleaseToken] = useState('')
@@ -2017,7 +2017,7 @@ function App() {
   }
 
   function generateReleaseChangelog() {
-    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.6'
+    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.5'
     const commits = releaseWorkspace?.recentCommits || '- 新增：常规功能升级与细节体验优化'
     const assetSection = releaseAssets.length > 0
       ? `\n### 📦 发行版附件\n${releaseAssets.map((a) => `- \`${a.uploadName || a.name}\` (${formatFileSize(a.size)})`).join('\n')}\n`
@@ -2029,7 +2029,7 @@ function App() {
   async function runReleaseTask() {
     if (running || batchRunning || pushRunning || releaseRunning) return
     if (!releaseRemoteUrl.trim()) return showToast('请先填写远程 GitHub / Gitee 仓库地址')
-    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.6）')
+    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.5）')
     if (!api) return showToast('任务执行需要在桌面版中运行')
 
     setReleaseRunning(true)
@@ -2360,7 +2360,7 @@ function App() {
           <div className="brand-mark" title="CodeSync Studio">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
-          <span className="brand-badge">v1.4.6</span>
+          <span className="brand-badge">v1.4.5</span>
         </div>
 
         <nav className="side-nav">
@@ -4098,8 +4098,8 @@ function PushSyncPanel({
         )}
 
         {pushProvider === 'git' && (
-          <div className="batch-options-grid">
-            <div className="field-group" style={{ marginTop: 0 }}>
+          <>
+            <div className="field-group">
               <div className="label-row">
                 <label className="field-title" htmlFor="push-branch-input">推送分支</label>
                 <span>{pushWorkspace?.branch ? `当前: ${pushWorkspace.branch}` : '默认 main'}</span>
@@ -4133,12 +4133,12 @@ function PushSyncPanel({
               </div>
             </div>
 
-            <div className="field-group" style={{ marginTop: 0 }}>
+            <div className="field-group">
               <div className="label-row">
                 <label className="field-title">推送范围</label>
                 <span>{pushWorkspace?.ahead > 0 ? `本地待推 ${pushWorkspace.ahead} 提交` : '改动文件与提交'}</span>
               </div>
-              <div className="input-with-icon">
+              <div className="input-with-icon scope-field">
                 <Upload size={14} />
                 <input
                   value={pushWorkspace?.parsedRepo ? `${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo}` : ''}
@@ -4146,14 +4146,14 @@ function PushSyncPanel({
                   tabIndex={-1}
                   className="readonly-repo-field"
                   title={pushWorkspace?.parsedRepo ? `${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo} (${pushWorkspace.parsedRepo.platform})` : '选择本地目录后自动识别远程仓库'}
-                  placeholder="选择本地目录后自动识别"
+                  placeholder="选择本地目录后自动识别远程仓库"
                 />
                 {pushWorkspace?.parsedRepo?.platform && (
                   <span className="push-stage-tag">{pushWorkspace.parsedRepo.platform.toUpperCase()}</span>
                 )}
               </div>
             </div>
-          </div>
+          </>
         )}
 
         <div className="field-group batch-urls-group">
@@ -5280,7 +5280,7 @@ function ReleaseSyncPanel({
     : ''
 
   return (
-    <div className="sync-panel panel">
+    <div className="sync-panel release-panel panel">
       <div className="panel-heading">
         <h2>版本发布</h2>
         <span className="secure-label"><Rocket size={12} /> {platformName}</span>
@@ -5295,6 +5295,7 @@ function ReleaseSyncPanel({
           <div className="input-with-icon">
             <FolderOpen size={15} />
             <input
+              id="release-target-input"
               value={releaseTarget}
               onChange={(e) => setReleaseTarget(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') onInspect() }}
@@ -5342,7 +5343,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTag}
                 onChange={(e) => setReleaseTag(e.target.value)}
-                placeholder="v1.4.6"
+                placeholder="v1.4.5"
                 disabled={releaseRunning}
               />
             </div>
@@ -5391,7 +5392,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTitle}
                 onChange={(e) => setReleaseTitle(e.target.value)}
-                placeholder="CodeSync Studio v1.4.6"
+                placeholder="CodeSync Studio v1.4.5"
                 disabled={releaseRunning}
               />
             </div>

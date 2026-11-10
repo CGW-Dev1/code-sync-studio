@@ -1030,6 +1030,10 @@ button:disabled {
   height: 36px;
   gap: 8px;
   color: var(--text-muted);
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
 }
@@ -2200,6 +2204,26 @@ button:disabled {
   flex-shrink: 0;
 }
 
+/* Push / Release panels: keep the message editor at a comfortable fixed height
+   so it never gets squeezed when more fields are present; the panel scrolls instead. */
+.push-sync-panel .batch-urls-group,
+.release-panel .batch-urls-group {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.push-sync-panel .batch-textarea,
+.release-panel .batch-textarea {
+  flex: 0 0 auto;
+  min-height: 118px;
+  height: 118px;
+}
+
+.release-panel .batch-textarea {
+  min-height: 150px;
+  height: 150px;
+}
+
 .batch-urls-group {
   flex: 1;
   min-height: 0;
@@ -2310,9 +2334,18 @@ button:disabled {
 
 .batch-options-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
   flex-shrink: 0;
+}
+
+.batch-options-grid > .field-group {
+  min-width: 0;
+}
+
+.batch-options-grid > .field-group > .input-with-icon,
+.batch-options-grid > .field-group > .select-wrap {
+  width: 100%;
 }
 
 /* High-Tech Batch Queue Table */
@@ -3140,10 +3173,13 @@ button:disabled {
 }
 
 .inline-branch-picker {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
@@ -3151,8 +3187,12 @@ button:disabled {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-left: 2px;
+  z-index: 2;
   transition: all 0.15s ease;
+}
+
+.input-with-icon:has(.inline-branch-picker) input {
+  padding-right: 32px;
 }
 
 .inline-branch-picker:hover {
