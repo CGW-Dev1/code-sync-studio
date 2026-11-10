@@ -3723,10 +3723,10 @@ function BatchTaskPanel({
                     className={`batch-subdir-btn ${currentSubdir ? 'active' : ''}`}
                     onClick={() => onOpenItemSubdir(item)}
                     disabled={running}
-                    title={currentSubdir ? `当前仅拉取子目录: ${currentSubdir}（点击修改）` : '点击按需选择只拉取某个子目录 (Sparse Checkout)'}
+                    title={currentSubdir ? `当前仅拉取子目录: ${currentSubdir}（点击修改）` : '按需选择只拉取某个子目录 (Sparse Checkout)'}
                   >
-                    <Folder size={10} />
-                    <span>{currentSubdir ? currentSubdir.split('/').pop() : '子目录'}</span>
+                    <Folder size={11} />
+                    {currentSubdir && <span>{currentSubdir.split('/').pop()}</span>}
                   </button>
                   {currentSubdir && (
                     <button
@@ -3908,6 +3908,32 @@ function BatchTaskPanel({
   )
 }
 
+function BranchSelect({ id, value, onChange, branches, disabled, fallback = 'main' }) {
+  const options = useMemo(() => {
+    const list = Array.isArray(branches) ? branches.filter(Boolean) : []
+    const current = (value || '').trim() || fallback
+    if (!list.includes(current)) list.unshift(current)
+    return list
+  }, [branches, value, fallback])
+
+  return (
+    <div className="select-wrap branch-select">
+      <GitBranch size={15} />
+      <select
+        id={id}
+        value={(value || '').trim() || fallback}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+      >
+        {options.map((name) => (
+          <option key={name} value={name}>{name}</option>
+        ))}
+      </select>
+      <ChevronDown size={15} />
+    </div>
+  )
+}
+
 function PushSyncPanel({
   pushProvider,
   setPushProvider,
@@ -4024,31 +4050,39 @@ function PushSyncPanel({
                 <div className="local-inspect-details">
                   {pushWorkspace.branch && <span>分支: <b>{pushWorkspace.branch}</b></span>}
                   {pushWorkspace.ahead > 0 && <span>待推: <b style={{ color: 'var(--emerald-text)' }}>↑{pushWorkspace.ahead}</b></span>}
-                  {pushWorkspace.lastCommit && <span title={pushWorkspace.lastCommit}>最新: <b>{pushWorkspace.lastCommit}</b></span>}
+                  {pushWorkspace.parsedRepo && (
+                    <span className="inspect-remote" title={`${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo}`}>
+                      远程: <b>{pushWorkspace.parsedRepo.owner}/{pushWorkspace.parsedRepo.repo}</b>
+                      <em>{pushWorkspace.parsedRepo.platform.toUpperCase()}</em>
+                    </span>
+                  )}
+                  {pushWorkspace.lastCommit && <span className="inspect-commit" title={pushWorkspace.lastCommit}>最新: <b>{pushWorkspace.lastCommit}</b></span>}
                 </div>
               ) : null}
             </div>
           )}
         </div>
 
-        <div className="field-group">
-          <div className="label-row">
-            <label className="field-title" htmlFor="push-remote-url">
-              远程 Git 仓库地址 (origin)
-            </label>
-            <span>填写目标仓库，提交时自动关联</span>
+        {(pushProvider !== 'git' || !pushWorkspace?.url) && (
+          <div className="field-group">
+            <div className="label-row">
+              <label className="field-title" htmlFor="push-remote-url">
+                {pushProvider === 'git' ? '远程 Git 仓库地址 (origin)' : '远程 SVN 仓库地址'}
+              </label>
+              <span>{pushProvider === 'git' ? '当前目录尚未关联远程仓库' : '由本地 SVN 工作副本自动识别'}</span>
+            </div>
+            <div className="input-with-icon">
+              <Upload size={15} />
+              <input
+                id="push-remote-url"
+                value={pushRemoteUrl}
+                onChange={(e) => setPushRemoteUrl(e.target.value)}
+                disabled={pushRunning || pushProvider === 'svn'}
+                placeholder="https://github.com/org/repo.git 或 git@github.com:org/repo.git"
+              />
+            </div>
           </div>
-          <div className="input-with-icon">
-            <Upload size={15} />
-            <input
-              id="push-remote-url"
-              value={pushRemoteUrl}
-              onChange={(e) => setPushRemoteUrl(e.target.value)}
-              disabled={pushRunning}
-              placeholder="https://github.com/org/repo.git 或 git@github.com:org/repo.git"
-            />
-          </div>
-        </div>
+        )}
 
         {pushProvider === 'git' && (
           <div className="field-group">
@@ -4098,62 +4132,20 @@ function PushSyncPanel({
         )}
 
         {pushProvider === 'git' && (
-          <>
-            <div className="field-group">
-              <div className="label-row">
-                <label className="field-title" htmlFor="push-branch-input">推送分支</label>
-                <span>{pushWorkspace?.branch ? `当前: ${pushWorkspace.branch}` : '默认 main'}</span>
-              </div>
-              <div className="input-with-icon">
-                <GitBranch size={14} />
-                <input
-                  id="push-branch-input"
-                  value={pushBranch}
-                  onChange={(e) => setPushBranch(e.target.value)}
-                  disabled={pushRunning}
-                  placeholder="main / master / dev"
-                />
-                {pushWorkspace?.branches?.length > 0 && (
-                  <div className="inline-branch-picker" title="点击切换本地已有分支">
-                    <ChevronDown size={13} />
-                    <select
-                      value={pushWorkspace.branches.includes(pushBranch) ? pushBranch : ''}
-                      onChange={(e) => { if (e.target.value) setPushBranch(e.target.value) }}
-                      disabled={pushRunning}
-                    >
-                      {!pushWorkspace.branches.includes(pushBranch) && (
-                        <option value="">{pushBranch || '选择分支'}</option>
-                      )}
-                      {pushWorkspace.branches.map((b) => (
-                        <option key={b} value={b}>{b}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
+          <div className="field-group">
+            <div className="label-row">
+              <label className="field-title" htmlFor="push-branch-input">推送分支</label>
+              <span>{pushWorkspace?.branch ? `当前: ${pushWorkspace.branch}` : '默认 main'}</span>
             </div>
-
-            <div className="field-group">
-              <div className="label-row">
-                <label className="field-title">推送范围</label>
-                <span>{pushWorkspace?.ahead > 0 ? `本地待推 ${pushWorkspace.ahead} 提交` : '改动文件与提交'}</span>
-              </div>
-              <div className="input-with-icon scope-field">
-                <Upload size={14} />
-                <input
-                  value={pushWorkspace?.parsedRepo ? `${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo}` : ''}
-                  readOnly
-                  tabIndex={-1}
-                  className="readonly-repo-field"
-                  title={pushWorkspace?.parsedRepo ? `${pushWorkspace.parsedRepo.owner}/${pushWorkspace.parsedRepo.repo} (${pushWorkspace.parsedRepo.platform})` : '选择本地目录后自动识别远程仓库'}
-                  placeholder="选择本地目录后自动识别远程仓库"
-                />
-                {pushWorkspace?.parsedRepo?.platform && (
-                  <span className="push-stage-tag">{pushWorkspace.parsedRepo.platform.toUpperCase()}</span>
-                )}
-              </div>
-            </div>
-          </>
+            <BranchSelect
+              id="push-branch-input"
+              value={pushBranch}
+              onChange={setPushBranch}
+              branches={pushWorkspace?.branches}
+              disabled={pushRunning}
+              fallback="main"
+            />
+          </div>
         )}
 
         <div className="field-group batch-urls-group">
@@ -4816,18 +4808,18 @@ function WorkspacePanel({
                         onClick={() => onUpdateSingle(item)}
                         disabled={isUpdating || batchUpdating}
                         title={needsUpdate ? '检测到远程有新版本，点击立即拉取更新' : '立即拉取更新该仓库'}
+                        aria-label="更新仓库"
                       >
-                        {isUpdating ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}
-                        <span>更新</span>
+                        {isUpdating ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}
                       </button>
                       <button
                         type="button"
                         className="workspace-action-btn push"
                         onClick={() => onJumpToPush(item)}
                         title="在【代码推送】中打开该仓库"
+                        aria-label="推送代码"
                       >
-                        <Upload size={12} />
-                        <span>推送</span>
+                        <Upload size={13} />
                       </button>
                       {item.provider === 'git' && onJumpToRelease && (
                         <button
@@ -4835,9 +4827,9 @@ function WorkspacePanel({
                           className="workspace-action-btn release"
                           onClick={() => onJumpToRelease(item)}
                           title="在【版本发布】中为此仓库发布 Release"
+                          aria-label="发布版本"
                         >
-                          <Rocket size={12} />
-                          <span>发布</span>
+                          <Rocket size={13} />
                         </button>
                       )}
                       <button
@@ -4845,6 +4837,7 @@ function WorkspacePanel({
                         className="history-action-btn"
                         onClick={() => onJumpToSingle(item)}
                         title="在【单仓同步】中载入该仓库"
+                        aria-label="载入单仓同步"
                       >
                         <ArrowUpRight size={13} />
                       </button>
@@ -4853,6 +4846,7 @@ function WorkspacePanel({
                         className="history-action-btn"
                         onClick={() => onOpenFolder(item.target)}
                         title="在资源管理器中打开文件夹"
+                        aria-label="打开本地文件夹"
                       >
                         <FolderOpen size={13} />
                       </button>
@@ -5351,34 +5345,17 @@ function ReleaseSyncPanel({
 
           <div className="field-group" style={{ marginTop: 0 }}>
             <div className="label-row">
-              <label className="field-title">目标分支</label>
+              <label className="field-title" htmlFor="release-branch-input">目标分支</label>
+              <span>{releaseWorkspace?.branch ? `当前: ${releaseWorkspace.branch}` : `${releaseWorkspace?.branches?.length || 0} 个本地分支`}</span>
             </div>
-            <div className="input-with-icon">
-              <GitBranch size={14} />
-              <input
-                value={releaseBranch}
-                onChange={(e) => setReleaseBranch(e.target.value)}
-                placeholder="main"
-                disabled={releaseRunning}
-              />
-              {releaseWorkspace?.branches?.length > 0 && (
-                <div className="inline-branch-picker" title="点击切换本地已有分支">
-                  <ChevronDown size={13} />
-                  <select
-                    value={releaseWorkspace.branches.includes(releaseBranch) ? releaseBranch : ''}
-                    onChange={(e) => { if (e.target.value) setReleaseBranch(e.target.value) }}
-                    disabled={releaseRunning}
-                  >
-                    {!releaseWorkspace.branches.includes(releaseBranch) && (
-                      <option value="">{releaseBranch || '选择分支'}</option>
-                    )}
-                    {releaseWorkspace.branches.map((b) => (
-                      <option key={b} value={b}>{b}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
+            <BranchSelect
+              id="release-branch-input"
+              value={releaseBranch}
+              onChange={setReleaseBranch}
+              branches={releaseWorkspace?.branches}
+              disabled={releaseRunning}
+              fallback="main"
+            />
           </div>
         </div>
 

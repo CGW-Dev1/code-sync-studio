@@ -1151,6 +1151,44 @@ button:disabled {
   gap: 5px;
 }
 
+.local-inspect-details .inspect-commit {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-inspect-details .inspect-remote {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-inspect-details .inspect-remote b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-inspect-details .inspect-remote em {
+  font-style: normal;
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--emerald-text);
+  background: rgba(0, 255, 157, 0.12);
+  border: 1px solid rgba(0, 255, 157, 0.28);
+}
+
+.local-inspect-details .inspect-commit b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .local-inspect-details b {
   color: var(--text-heading);
 }
@@ -1196,6 +1234,20 @@ button:disabled {
   background: var(--bg-card-solid);
   color: var(--text-primary);
   padding: 8px;
+}
+
+/* Branch picker: identical visual language to the single-repo version selector */
+.select-wrap.branch-select select {
+  padding-right: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-wrap.branch-select > svg:last-child {
+  position: absolute;
+  right: 12px;
+  pointer-events: none;
+  color: var(--text-muted);
 }
 
 /* ==========================================================================
@@ -2204,24 +2256,40 @@ button:disabled {
   flex-shrink: 0;
 }
 
-/* Push / Release panels: keep the message editor at a comfortable fixed height
-   so it never gets squeezed when more fields are present; the panel scrolls instead. */
+/* Push / Release panels: the message editor absorbs the remaining card height,
+   so there is never a large empty block under it. min-height guarantees the
+   editor stays usable and the panel scrolls when content exceeds the card. */
 .push-sync-panel .batch-urls-group,
 .release-panel .batch-urls-group {
-  flex: 0 0 auto;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 200px;
 }
 
 .push-sync-panel .batch-textarea,
 .release-panel .batch-textarea {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  height: auto;
   min-height: 118px;
-  height: 118px;
 }
 
 .release-panel .batch-textarea {
-  min-height: 150px;
-  height: 150px;
+  min-height: 160px;
+}
+
+/* The push panel has more fields than the release panel; tighten the
+   vertical rhythm so the commit editor stays visible without scrolling. */
+.push-sync-panel .sync-panel-content > .field-group {
+  margin-top: 10px;
+}
+
+.push-sync-panel .local-inspect-card {
+  margin-top: 8px;
+  padding: 8px 12px;
+  gap: 3px;
+}
+
+.push-sync-panel .batch-textarea {
+  min-height: 104px;
 }
 
 .batch-urls-group {
@@ -2511,6 +2579,11 @@ button:disabled {
   height: 24px;
 }
 
+.batch-queue-header .batch-fetch-all-btn {
+  height: 24px;
+  padding: 0 10px;
+}
+
 .batch-fetch-all-btn {
   height: 26px;
   display: inline-flex;
@@ -2536,7 +2609,7 @@ button:disabled {
 
 .batch-queue-col-headers {
   display: grid;
-  grid-template-columns: 28px minmax(92px, 0.92fr) minmax(195px, 1.7fr) minmax(105px, 1.05fr) 68px 78px;
+  grid-template-columns: 26px minmax(90px, 0.95fr) minmax(200px, 1.85fr) minmax(85px, 0.9fr) 64px 62px;
   gap: 8px;
   padding: 6px 12px;
   background: rgba(4, 7, 16, 0.85);
@@ -2553,13 +2626,14 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
 
 .batch-queue-item {
   display: grid;
-  grid-template-columns: 28px minmax(92px, 0.92fr) minmax(195px, 1.7fr) minmax(105px, 1.05fr) 68px 78px;
+  grid-template-columns: 26px minmax(90px, 0.95fr) minmax(200px, 1.85fr) minmax(85px, 0.9fr) 64px 62px;
   gap: 8px;
   align-items: center;
   padding: 6px 12px;
@@ -2572,6 +2646,10 @@ button:disabled {
 
 .batch-queue-item:hover {
   background: rgba(56, 189, 248, 0.05);
+}
+
+.batch-queue-item > * {
+  min-width: 0;
 }
 
 .batch-item-index {
@@ -3117,6 +3195,7 @@ button:disabled {
 
 .batch-subdir-btn {
   height: 24px;
+  min-width: 24px;
   padding: 0 7px;
   border-radius: var(--radius-xs);
   background: rgba(255, 255, 255, 0.04);
@@ -3133,6 +3212,10 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: all 0.15s ease;
+}
+
+.batch-subdir-btn:not(.active) {
+  padding: 0 6px;
 }
 
 .batch-subdir-btn span {
@@ -3265,7 +3348,7 @@ button:disabled {
 
 .push-changes-col-headers,
 .push-change-item {
-  grid-template-columns: 40px 88px minmax(180px, 1fr) 110px;
+  grid-template-columns: 40px 92px minmax(160px, 1fr) 148px;
 }
 
 .push-change-item {
@@ -3284,6 +3367,10 @@ button:disabled {
 }
 
 .push-stage-tag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 10px;
   padding: 1px 5px;
   border-radius: var(--radius-xs);
@@ -3394,7 +3481,7 @@ button:disabled {
 
 .workspace-table-header,
 .workspace-table-row {
-  grid-template-columns: 30px 54px minmax(105px, 1fr) minmax(92px, 0.85fr) minmax(88px, 0.78fr) minmax(130px, 1.2fr) minmax(120px, 1.05fr) minmax(110px, 0.95fr) 218px;
+  grid-template-columns: 30px 54px minmax(120px, 1.1fr) minmax(84px, 0.75fr) minmax(80px, 0.7fr) minmax(120px, 1.15fr) minmax(140px, 1.5fr) minmax(150px, 1.6fr) 160px;
 }
 
 .workspace-col-name {
@@ -3402,6 +3489,17 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-heading);
+}
+
+/* Every cell must be allowed to shrink, otherwise the fr tracks
+   get pushed wider than the table and content spills into neighbours. */
+.workspace-table-row > *,
+.history-table-row > * {
+  min-width: 0;
+}
+
+.workspace-table-row .workspace-hash-tag {
+  display: none;
 }
 
 .workspace-col-status,
@@ -3501,8 +3599,9 @@ button:disabled {
 }
 
 .workspace-action-btn {
-  height: 25px;
-  padding: 0 8px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border-radius: var(--radius-xs);
   background: rgba(0, 240, 255, 0.1);
   border: 1px solid rgba(0, 240, 255, 0.3);
@@ -3510,7 +3609,6 @@ button:disabled {
   font-size: 11px;
   font-weight: 500;
   display: inline-flex;
-  flex-direction: row;
   align-items: center;
   justify-content: center;
   gap: 4px;
@@ -4057,7 +4155,7 @@ button.primary-action:disabled:has(.spin) {
 
 .batch-queue-col-headers.release-assets-col-headers,
 .batch-queue-item.release-asset-item {
-  grid-template-columns: 32px minmax(170px, 1.55fr) 78px minmax(150px, 1.15fr) 60px;
+  grid-template-columns: 32px minmax(180px, 1.6fr) 80px minmax(140px, 1.2fr) 74px;
   gap: 10px;
 }
 
