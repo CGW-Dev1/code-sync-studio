@@ -11,6 +11,7 @@ import {
   CircleHelp,
   Clock3,
   Columns2,
+  Code,
   Copy,
   Download,
   ExternalLink,
@@ -20,6 +21,7 @@ import {
   FolderOpen,
   GitBranch,
   GitCommitHorizontal,
+  Globe,
   HardDriveDownload,
   History,
   Info,
@@ -995,8 +997,12 @@ function App() {
 
   useEffect(() => {
     if (!api) return
-    api.getToolStatus().then(setToolStatus).catch(() => {})
-    return api.onTaskEvent((event) => {
+    // Defer external tool probing so the window paints immediately; git/svn --version
+    // spawns two short-lived processes and is only needed for the sidebar badges.
+    const toolTimer = window.setTimeout(() => {
+      api.getToolStatus().then(setToolStatus).catch(() => {})
+    }, 700)
+    const unsubscribe = api.onTaskEvent((event) => {
       if (workspaceRunningRef.current) {
         return
       }
@@ -1086,7 +1092,47 @@ function App() {
         window.setTimeout(() => setToast(''), 2600)
       }
     })
+    return () => {
+      window.clearTimeout(toolTimer)
+      unsubscribe()
+    }
   }, [])
+
+  // Global keyboard shortcuts: Ctrl+1..6 switch workbench, Ctrl/⌘+Enter starts the
+  // primary action of the current workbench, Esc closes the settings dialog.
+  useEffect(() => {
+    const MENU_ORDER = ['single', 'batch', 'push', 'release', 'workspace', 'history']
+    function onKeyDown(event) {
+      const mod = event.ctrlKey || event.metaKey
+      if (!mod) return
+      const key = event.key
+      if (key >= '1' && key <= '6') {
+        const target = MENU_ORDER[Number(key) - 1]
+        if (target) {
+          event.preventDefault()
+          setMode(target)
+        }
+        return
+      }
+      if (key === 'Enter') {
+        event.preventDefault()
+        if (running || batchRunning || pushRunning || releaseRunning) return
+        if (mode === 'single') runTask()
+        else if (mode === 'batch') runBatchSync(false)
+        else if (mode === 'push') runPushTask()
+        else if (mode === 'release') runReleaseTask()
+        return
+      }
+      if (key === 'k') {
+        event.preventDefault()
+        const searchable = document.querySelector('.workspace-table-container, .history-table-container')
+        const input = searchable?.querySelector('input')
+        if (input) input.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [mode, running, batchRunning, pushRunning, releaseRunning])
 
   useEffect(() => {
     setRepo(null)
@@ -1222,6 +1268,20 @@ function App() {
     } else {
       showToast('桌面端支持一键打开本地文件夹')
     }
+  }
+
+  async function openTerminalAt(folderPath) {
+    if (!folderPath) return showToast('请先选择目录')
+    if (!api?.openTerminal) return showToast('终端启动需要在桌面版中使用')
+    const result = await api.openTerminal(folderPath)
+    if (!result?.ok) showToast(result?.error || '打开终端失败')
+  }
+
+  async function openVSCodeAt(folderPath) {
+    if (!folderPath) return showToast('请先选择目录')
+    if (!api?.openInVSCode) return showToast('VS Code 启动需要在桌面版中使用')
+    const result = await api.openInVSCode(folderPath)
+    if (!result?.ok) showToast(result?.error || '未检测到 VS Code，请确认已安装并加入 PATH')
   }
 
   async function probe(overrideUrl) {
@@ -2467,6 +2527,7 @@ function App() {
               type="button"
               className={`mode-tab-btn ${mode === 'single' ? 'active' : ''}`}
               onClick={() => setMode('single')}
+              title="单仓同步 (Ctrl+1)"
             >
               <HardDriveDownload size={13} />
               <span>单仓同步</span>
@@ -2475,6 +2536,7 @@ function App() {
               type="button"
               className={`mode-tab-btn ${mode === 'batch' ? 'active' : ''}`}
               onClick={() => setMode('batch')}
+              title="批量拉取 (Ctrl+2)"
             >
               <Layers size={13} />
               <span>批量拉取</span>
@@ -2483,6 +2545,7 @@ function App() {
               type="button"
               className={`mode-tab-btn ${mode === 'push' ? 'active' : ''}`}
               onClick={() => setMode('push')}
+              title="代码推送 (Ctrl+3)"
             >
               <Upload size={13} />
               <span>代码推送</span>
@@ -2491,6 +2554,7 @@ function App() {
               type="button"
               className={`mode-tab-btn ${mode === 'release' ? 'active' : ''}`}
               onClick={() => setMode('release')}
+              title="版本发布 (Ctrl+4)"
             >
               <Rocket size={13} />
               <span>版本发布</span>
@@ -2499,6 +2563,7 @@ function App() {
               type="button"
               className={`mode-tab-btn ${mode === 'workspace' ? 'active' : ''}`}
               onClick={() => setMode('workspace')}
+              title="本地仓库 (Ctrl+5)"
             >
               <FolderOpen size={13} />
               <span>本地仓库</span>
@@ -2507,6 +2572,7 @@ function App() {
               type="button"
               className={`mode-tab-btn ${mode === 'history' ? 'active' : ''}`}
               onClick={() => setMode('history')}
+              title="同步记录 (Ctrl+6)"
             >
               <History size={13} />
               <span>同步记录</span>
@@ -2791,7 +2857,7 @@ function App() {
                   )}
                 </div>
                 <div className="panel-actions">
-                  <button className="primary-action" onClick={runTask} disabled={running}>
+                  <button className="primary-action" onClick={runTask} disabled={running} title="快捷键 Ctrl+Enter">
                     {running ? <LoaderCircle size={16} className="spin" /> : action === 'pull' ? <Download size={16} /> : <RefreshCw size={16} />}
                     {running ? '正在执行...' : action === 'pull' ? '开始拉取代码' : '开始更新代码'}
                   </button>
@@ -3036,6 +3102,8 @@ function App() {
               onJumpToRelease={jumpToReleaseRepo}
               onJumpToSingle={jumpToSingleRepo}
               onOpenFolder={openLocalPath}
+              onOpenTerminal={openTerminalAt}
+              onOpenVSCode={openVSCodeAt}
             />
           ) : (
             <section className="history-layout">
@@ -3506,6 +3574,7 @@ function BatchSyncPanel({
           className="primary-action"
           onClick={onStart}
           disabled={batchRunning || !batchItems.length}
+          title="快捷键 Ctrl+Enter"
         >
           {batchRunning ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}
           {batchRunning ? '批量执行中...' : `开始批量拉取 (${batchItems.length})`}
@@ -4199,6 +4268,7 @@ function PushSyncPanel({
           className="primary-action"
           onClick={onStartPush}
           disabled={pushRunning || !pushTarget.trim()}
+          title="快捷键 Ctrl+Enter"
         >
           {pushRunning ? <LoaderCircle size={16} className="spin" /> : <Upload size={16} />}
           {pushRunning
@@ -4536,7 +4606,9 @@ function WorkspacePanel({
   onJumpToPush,
   onJumpToRelease,
   onJumpToSingle,
-  onOpenFolder
+  onOpenFolder,
+  onOpenTerminal,
+  onOpenVSCode
 }) {
   const filteredRepos = useMemo(() => {
     return repos.filter((r) => {
@@ -4850,6 +4922,24 @@ function WorkspacePanel({
                       >
                         <FolderOpen size={13} />
                       </button>
+                      <button
+                        type="button"
+                        className="history-action-btn"
+                        onClick={() => onOpenTerminal(item.target)}
+                        title="在此目录打开终端"
+                        aria-label="打开终端"
+                      >
+                        <Terminal size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="history-action-btn"
+                        onClick={() => onOpenVSCode(item.target)}
+                        title="用 VS Code 打开该仓库"
+                        aria-label="用 VS Code 打开"
+                      >
+                        <Code size={13} />
+                      </button>
                     </div>
                   </div>
                 )
@@ -4887,22 +4977,31 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
           </div>
           <button className="icon-button dialog-close" onClick={onClose} disabled={saving || testing} title="关闭"><X size={18} /></button>
         </div>
-        <p className="dialog-intro">没有本机凭证时，可在这里配置访问 Git / SVN 仓库所需的认证信息。</p>
+        <p className="dialog-intro">
+          {tab === 'network'
+            ? '配置全局网络代理与 Git 提交身份，对所有仓库操作统一生效。'
+            : '没有本机凭证时，可在这里配置访问 Git / SVN 仓库所需的认证信息。'}
+        </p>
         {status?.storageAvailable === false && (
           <div className="credential-alert">
             <AlertCircle size={15} />
             <span>当前系统未启用安全凭据存储，暂时无法保存密码。</span>
           </div>
         )}
-        <div className="credential-tabs">
+        <div className="credential-tabs credential-tabs-3">
           <button className={tab === 'git' ? 'selected git-selected' : ''} onClick={() => setTab('git')} type="button">
             <GitBranch size={15} />Git
           </button>
           <button className={tab === 'svn' ? 'selected svn-selected' : ''} onClick={() => setTab('svn')} type="button">
             <Server size={15} />SVN
           </button>
+          <button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')} type="button">
+            <Globe size={15} />网络与身份
+          </button>
         </div>
-        {tab === 'git' ? (
+        {tab === 'network' ? (
+          <NetworkSettingsPane />
+        ) : tab === 'git' ? (
           <div className="credential-form">
             <div className="credential-field">
               <label className="field-title">Git 认证方式</label>
@@ -4985,28 +5084,198 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
             </div>
           </div>
         )}
-        <div className="credential-security-note">
-          <LockKeyhole size={15} />
-          <span>凭证使用 Windows 用户数据保护加密保存，仅在本机命令执行期间使用，不会出现在任务日志中。</span>
-        </div>
-        <div className={`credential-test ${testMessage?.startsWith('连接成功') ? 'success' : testMessage ? 'error' : ''}`}>
-          <div>
-            <b>验证 {tab === 'git' ? 'Git' : 'SVN'} 凭证</b>
-            <span>{testMessage || `使用当前仓库地址执行一次只读 ${tab === 'git' ? 'git ls-remote' : 'svn info'}，不会拉取代码。`}</span>
+        {tab !== 'network' && (
+          <>
+            <div className="credential-security-note">
+              <LockKeyhole size={15} />
+              <span>凭证使用 Windows 用户数据保护加密保存，仅在本机命令执行期间使用，不会出现在任务日志中。</span>
+            </div>
+            <div className={`credential-test ${testMessage?.startsWith('连接成功') ? 'success' : testMessage ? 'error' : ''}`}>
+              <div>
+                <b>验证 {tab === 'git' ? 'Git' : 'SVN'} 凭证</b>
+                <span>{testMessage || `使用当前仓库地址执行一次只读 ${tab === 'git' ? 'git ls-remote' : 'svn info'}，不会拉取代码。`}</span>
+              </div>
+              <button className="ghost-action" onClick={onTest} disabled={testing || saving}>
+                {testing ? <LoaderCircle size={15} className="spin" /> : <CheckCircle2 size={15} />}
+                测试连接
+              </button>
+            </div>
+            <div className="dialog-actions">
+              <button className="ghost-action" onClick={onClear} disabled={saving || testing}><Trash2 size={15} />清除当前凭证</button>
+              <button className="primary-action" onClick={onSave} disabled={saving || testing || status?.storageAvailable === false}>
+                {saving ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />}
+                保存凭证
+              </button>
+            </div>
+          </>
+        )}
+        {tab === 'network' && (
+          <div className="dialog-actions">
+            <span className="dialog-hint">网络与身份设置保存后立即生效</span>
+            <button className="ghost-action" onClick={onClose}>关闭</button>
           </div>
-          <button className="ghost-action" onClick={onTest} disabled={testing || saving}>
-            {testing ? <LoaderCircle size={15} className="spin" /> : <CheckCircle2 size={15} />}
-            测试连接
-          </button>
-        </div>
-        <div className="dialog-actions">
-          <button className="ghost-action" onClick={onClear} disabled={saving || testing}><Trash2 size={15} />清除当前凭证</button>
-          <button className="primary-action" onClick={onSave} disabled={saving || testing || status?.storageAvailable === false}>
-            {saving ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />}
-            保存凭证
-          </button>
-        </div>
+        )}
       </section>
+    </div>
+  )
+}
+
+function NetworkSettingsPane() {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [savingIdentity, setSavingIdentity] = useState(false)
+  const [message, setMessage] = useState('')
+  const [proxy, setProxy] = useState({ mode: 'system', url: '' })
+  const [identity, setIdentity] = useState({ name: '', email: '' })
+  const [globalInfo, setGlobalInfo] = useState({ name: '', email: '' })
+  const [runtime, setRuntime] = useState(null)
+
+  useEffect(() => {
+    if (!api?.getSettings) {
+      setLoading(false)
+      return
+    }
+    Promise.all([api.getSettings(), api.getRuntimeInfo?.() || Promise.resolve(null)])
+      .then(([settings, info]) => {
+        setProxy(settings.proxy || { mode: 'system', url: '' })
+        setIdentity({
+          name: settings.gitIdentity?.name || settings.globalName || '',
+          email: settings.gitIdentity?.email || settings.globalEmail || ''
+        })
+        setGlobalInfo({ name: settings.globalName || '', email: settings.globalEmail || '' })
+        setRuntime(info)
+      })
+      .catch((error) => setMessage(appError(error)))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function saveProxy() {
+    if (!api?.saveSettings) return
+    setSaving(true)
+    setMessage('')
+    try {
+      if (proxy.mode === 'custom' && !/^(https?|socks5?):\/\/.+/i.test(proxy.url.trim())) {
+        throw new Error('请填写完整代理地址，例如 http://127.0.0.1:7890')
+      }
+      await api.saveSettings({ proxy })
+      setMessage('代理设置已保存，后续 Git / SVN 操作立即生效')
+    } catch (error) {
+      setMessage(appError(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveIdentity() {
+    if (!api?.saveGitIdentity) return
+    setSavingIdentity(true)
+    setMessage('')
+    try {
+      const status = await api.saveGitIdentity(identity)
+      setGlobalInfo({ name: status.globalName || '', email: status.globalEmail || '' })
+      setMessage('已写入 Git 全局配置 user.name / user.email')
+    } catch (error) {
+      setMessage(appError(error))
+    } finally {
+      setSavingIdentity(false)
+    }
+  }
+
+  if (loading) {
+    return <div className="credential-form"><div className="network-loading"><LoaderCircle size={16} className="spin" />正在读取本机设置...</div></div>
+  }
+
+  return (
+    <div className="credential-form network-pane">
+      <div className="credential-field">
+        <label className="field-title">网络代理</label>
+        <div className="credential-mode network-mode">
+          <button type="button" className={proxy.mode === 'system' ? 'selected' : ''} onClick={() => setProxy({ ...proxy, mode: 'system' })}>
+            <Globe size={14} />
+            <span><b>跟随系统</b><small>使用系统环境变量代理</small></span>
+          </button>
+          <button type="button" className={proxy.mode === 'none' ? 'selected' : ''} onClick={() => setProxy({ ...proxy, mode: 'none' })}>
+            <Globe size={14} />
+            <span><b>不使用代理</b><small>直连所有仓库</small></span>
+          </button>
+          <button type="button" className={proxy.mode === 'custom' ? 'selected' : ''} onClick={() => setProxy({ ...proxy, mode: 'custom' })}>
+            <Globe size={14} />
+            <span><b>自定义代理</b><small>填写 HTTP / SOCKS 代理地址</small></span>
+          </button>
+        </div>
+      </div>
+
+      {proxy.mode === 'custom' && (
+        <div className="credential-field">
+          <label className="field-title" htmlFor="proxy-url">代理地址</label>
+          <div className="input-with-icon">
+            <Globe size={15} />
+            <input
+              id="proxy-url"
+              value={proxy.url}
+              onChange={(event) => setProxy({ ...proxy, url: event.target.value })}
+              placeholder="http://127.0.0.1:7890"
+            />
+          </div>
+          <div className="field-hint">仅对公网仓库生效；局域网 / 内网地址会自动直连，不走代理。</div>
+        </div>
+      )}
+
+      <div className="credential-field" style={{ marginTop: 2 }}>
+        <button type="button" className="ghost-action" onClick={saveProxy} disabled={saving}>
+          {saving ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
+          保存代理设置
+        </button>
+      </div>
+
+      <div className="network-divider" />
+
+      <div className="credential-field">
+        <div className="credential-label-row">
+          <label className="field-title">Git 全局身份</label>
+          <span className="network-current">
+            当前：{globalInfo.name || '未配置'} / {globalInfo.email || '未配置'}
+          </span>
+        </div>
+        <div className="network-grid">
+          <div className="input-with-icon">
+            <GitBranch size={14} />
+            <input
+              value={identity.name}
+              onChange={(event) => setIdentity({ ...identity, name: event.target.value })}
+              placeholder="user.name（提交作者）"
+            />
+          </div>
+          <div className="input-with-icon">
+            <Upload size={14} />
+            <input
+              value={identity.email}
+              onChange={(event) => setIdentity({ ...identity, email: event.target.value })}
+              placeholder="user.email（提交邮箱）"
+            />
+          </div>
+        </div>
+        <div className="field-hint">写入本机 <code>git config --global</code>，新建仓库提交时自动使用，无需每次配置。</div>
+      </div>
+
+      <div className="credential-field">
+        <button type="button" className="ghost-action" onClick={saveIdentity} disabled={savingIdentity}>
+          {savingIdentity ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
+          写入 Git 全局配置
+        </button>
+      </div>
+
+      {message && <div className={`network-message ${/^(代理设置已保存|已写入)/.test(message) ? 'success' : 'error'}`}>{message}</div>}
+
+      {runtime && (
+        <div className="network-runtime">
+          <span>版本 <b>v{runtime.version}</b></span>
+          <span>Electron <b>{runtime.electron}</b></span>
+          <span>Chromium <b>{runtime.chrome}</b></span>
+          <span>Node <b>{runtime.node}</b></span>
+          <span>架构 <b>{runtime.arch}</b></span>
+        </div>
+      )}
     </div>
   )
 }
@@ -5467,7 +5736,7 @@ function ReleaseSyncPanel({
       </div>
 
       <div className="panel-actions">
-        <button className="primary-action" onClick={onStartRelease} disabled={releaseRunning || !releaseTarget.trim()}>
+        <button className="primary-action" onClick={onStartRelease} disabled={releaseRunning || !releaseTarget.trim()} title="快捷键 Ctrl+Enter">
           {releaseRunning ? <LoaderCircle size={16} className="spin" /> : <Rocket size={16} />}
           {releaseRunning ? `正在发布 (${Math.round(releaseProgress.value || 0)}%)...` : `开始发布 ${releaseTag || 'Release'}`}
         </button>

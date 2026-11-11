@@ -130,6 +130,106 @@ function clearCredentialProvider(provider) {
   return credentialStatusFromStore(saveCredentialStore(next))
 }
 
+/* ------------------------------------------------------------------
+ * Application settings (non-sensitive): network proxy & Git identity
+ * ------------------------------------------------------------------ */
+let appSettings = null
+
+function settingsFilePath() {
+  return path.join(app.getPath('userData'), 'settings.json')
+}
+
+function emptySettings() {
+  return {
+    proxy: { mode: 'system', url: '' },
+    gitIdentity: { name: '', email: '' },
+    startup: { openDevTools: false }
+  }
+}
+
+function normalizeSettings(value = {}) {
+  const base = emptySettings()
+  const proxy = value.proxy || {}
+  const identity = value.gitIdentity || {}
+  const startup = value.startup || {}
+  const mode = ['system', 'none', 'custom'].includes(proxy.mode) ? proxy.mode : base.proxy.mode
+  return {
+    proxy: {
+      mode,
+      url: typeof proxy.url === 'string' ? proxy.url.trim() : ''
+    },
+    gitIdentity: {
+      name: typeof identity.name === 'string' ? identity.name.trim() : '',
+      email: typeof identity.email === 'string' ? identity.email.trim() : ''
+    },
+    startup: { openDevTools: Boolean(startup.openDevTools) }
+  }
+}
+
+function loadSettings() {
+  if (appSettings) return appSettings
+  appSettings = emptySettings()
+  try {
+    const raw = JSON.parse(fs.readFileSync(settingsFilePath(), 'utf8'))
+    appSettings = normalizeSettings(raw)
+  } catch {}
+  return appSettings
+}
+
+function saveSettings(patch = {}) {
+  const current = loadSettings()
+  const next = normalizeSettings({
+    proxy: { ...current.proxy, ...(patch.proxy || {}) },
+    gitIdentity: { ...current.gitIdentity, ...(patch.gitIdentity || {}) },
+    startup: { ...current.startup, ...(patch.startup || {}) }
+  })
+  fs.mkdirSync(app.getPath('userData'), { recursive: true })
+  fs.writeFileSync(settingsFilePath(), JSON.stringify(next, null, 2), { encoding: 'utf8' })
+  appSettings = next
+  return next
+}
+
+function readGlobalGitConfig(key) {
+  try {
+    const res = spawnSync('git', ['config', '--global', '--get', key], { encoding: 'utf8', windowsHide: true, timeout: 4000 })
+    return (res.stdout || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function writeGlobalGitConfig(key, value) {
+  const res = spawnSync('git', ['config', '--global', key, value], { encoding: 'utf8', windowsHide: true, timeout: 4000 })
+  if (res.status !== 0) throw new Error((res.stderr || `写入 Git 全局配置 ${key} 失败`).trim())
+}
+
+function settingsStatus() {
+  const settings = loadSettings()
+  return {
+    proxy: settings.proxy,
+    gitIdentity: settings.gitIdentity,
+    globalName: readGlobalGitConfig('user.name'),
+    globalEmail: readGlobalGitConfig('user.email')
+  }
+}
+
+function svnProxyArgs(proxyUrl) {
+  try {
+    const parsed = new URL(proxyUrl)
+    const host = parsed.hostname
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+    const args = [
+      '--config-option', `servers:global:http-proxy-host=${host}`,
+      '--config-option', `servers:global:http-proxy-port=${port}`
+    ]
+    if (parsed.username) args.push('--config-option', `servers:global:http-proxy-username=${decodeURIComponent(parsed.username)}`)
+    if (parsed.password) args.push('--config-option', `servers:global:http-proxy-password=${decodeURIComponent(parsed.password)}`)
+    return args
+  } catch {
+    return []
+  }
+}
+
 function sendTaskEvent(event) {
   const enriched = {
     provider: activeJob?.provider,
@@ -306,16 +406,41 @@ function createCommandSession(command, args, options = {}) {
 
   const targetUrl = options.targetUrl || args.find((a) => typeof a === 'string' && (/^https?:\/\//i.test(a) || /^svn(?:\+[a-z]+)?:\/\//i.test(a) || /^git@/i.test(a))) || ''
 
-  if (targetUrl && isPrivateOrLocalHost(targetUrl)) {
-    if (command === 'git') {
-      preparedArgs.unshift('-c', 'http.proxy=', '-c', 'http.sslVerify=false')
+  // Network proxy: explicit user setting wins, except for intranet hosts which must
+  // always be reached directly (corporate proxies usually cannot route them).
+  const isInternalTarget = Boolean(targetUrl && isPrivateOrLocalHost(targetUrl))
+  const proxySetting = options.proxy || loadSettings().proxy
+  const effectiveProxyMode = isInternalTarget ? 'none' : proxySetting.mode
+  const customProxyUrl = effectiveProxyMode === 'custom' ? String(proxySetting.url || '').trim() : ''
+
+  if (command === 'git' && args[0] !== '--version') {
+    if (customProxyUrl) {
+      preparedArgs.unshift('-c', `http.proxy=${customProxyUrl}`, '-c', `https.proxy=${customProxyUrl}`)
+    } else if (effectiveProxyMode === 'none') {
+      preparedArgs.unshift('-c', 'http.proxy=', '-c', 'https.proxy=')
     }
+  }
+
+  if (customProxyUrl) {
+    env.HTTP_PROXY = customProxyUrl
+    env.HTTPS_PROXY = customProxyUrl
+    env.http_proxy = customProxyUrl
+    env.https_proxy = customProxyUrl
+  } else if (effectiveProxyMode === 'none') {
     delete env.HTTP_PROXY
     delete env.HTTPS_PROXY
     delete env.ALL_PROXY
     delete env.http_proxy
     delete env.https_proxy
     delete env.all_proxy
+  }
+
+  if (isInternalTarget && command === 'git') {
+    preparedArgs.unshift('-c', 'http.sslVerify=false')
+  }
+
+  if (command === 'svn' && args[0] !== '--version') {
+    if (customProxyUrl) preparedArgs.push(...svnProxyArgs(customProxyUrl))
   }
 
   if (command === 'git') {
@@ -2287,6 +2412,7 @@ function toolStatus(command) {
 }
 
 app.whenReady().then(() => {
+  app.setAppUserModelId('com.codesync.studio')
   nativeTheme.themeSource = 'dark'
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -2300,9 +2426,19 @@ app.whenReady().then(() => {
       symbolColor: '#cbd5e1',
       height: 32
     },
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: false }
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      spellcheck: false,
+      v8CacheOptions: 'code'
+    }
   })
   Menu.setApplicationMenu(null)
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (loadSettings().startup.openDevTools) mainWindow.webContents.openDevTools({ mode: 'detach' })
+  })
   mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) mainWindow.show() })
 })
@@ -2360,6 +2496,71 @@ ipcMain.handle('path:open', async (_, target) => {
   } catch {}
   return false
 })
+ipcMain.handle('path:open-terminal', async (_, target) => {
+  const dir = typeof target === 'string' && target.trim() ? target.trim() : ''
+  if (dir && !fs.existsSync(dir)) return { ok: false, error: '目录不存在' }
+  try {
+    if (process.platform === 'win32') {
+      if (dir) {
+        spawn('cmd.exe', ['/c', 'start', '""', 'cmd.exe', '/k', `cd /d "${dir}"`], { detached: true, stdio: 'ignore', windowsHide: false }).unref()
+      } else {
+        spawn('cmd.exe', ['/c', 'start', '""', 'cmd.exe'], { detached: true, stdio: 'ignore', windowsHide: false }).unref()
+      }
+    } else if (process.platform === 'darwin') {
+      spawn('open', ['-a', 'Terminal', dir || '.'], { detached: true, stdio: 'ignore' }).unref()
+    } else {
+      spawn('x-terminal-emulator', dir ? ['--working-directory', dir] : [], { detached: true, stdio: 'ignore' }).unref()
+    }
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+})
+ipcMain.handle('path:open-vscode', async (_, target) => {
+  const dir = typeof target === 'string' && target.trim() ? target.trim() : ''
+  if (dir && !fs.existsSync(dir)) return { ok: false, error: '目录不存在' }
+  const candidates = process.platform === 'win32'
+    ? [
+        ['code.cmd', dir ? [dir] : ['.']],
+        ['code', dir ? [dir] : ['.']]
+      ]
+    : [['code', dir ? [dir] : ['.']]]
+  for (const [command, args] of candidates) {
+    const result = spawnSync(command, args, { windowsHide: true, timeout: 5000, shell: process.platform === 'win32' })
+    if (!result.error && result.status === 0) return { ok: true }
+  }
+  // Fallback: try the protocol handler registered by VS Code
+  try {
+    const url = `vscode://file/${encodeURI((dir || process.cwd()).replace(/\\/g, '/'))}`
+    await shell.openExternal(url)
+    return { ok: true, fallback: true }
+  } catch (error) {
+    return { ok: false, error: '未检测到 VS Code，请确认已安装并加入 PATH' }
+  }
+})
+ipcMain.handle('settings:get', () => settingsStatus())
+ipcMain.handle('settings:save', (_, patch) => {
+  const saved = saveSettings(patch || {})
+  return { ...settingsStatus(), saved }
+})
+ipcMain.handle('git:identity:save', (_, identity) => {
+  const name = typeof identity?.name === 'string' ? identity.name.trim() : ''
+  const email = typeof identity?.email === 'string' ? identity.email.trim() : ''
+  if (name) writeGlobalGitConfig('user.name', name)
+  if (email) writeGlobalGitConfig('user.email', email)
+  saveSettings({ gitIdentity: { name, email } })
+  return settingsStatus()
+})
+ipcMain.handle('app:runtime-info', () => ({
+  version: app.getVersion(),
+  electron: process.versions.electron,
+  chrome: process.versions.chrome,
+  node: process.versions.node,
+  platform: process.platform,
+  arch: process.arch,
+  userData: app.getPath('userData'),
+  startupMs: Math.round(process.uptime() * 1000)
+}))
 ipcMain.handle('path:check', (_, target) => {
   if (!target || typeof target !== 'string') return { exists: false, isDirectory: false, empty: true }
   try {

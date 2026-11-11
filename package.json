@@ -35,6 +35,7 @@
       "output": "release-codesync"
     },
     "asar": false,
+    "compression": "maximum",
     "win": {
       "target": ["nsis", "portable"],
       "icon": "assets/codesync-sakura.ico"
@@ -42,7 +43,11 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "artifactName": "CodeSync.Studio.Setup.${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "CodeSync.Studio.${version}.${ext}"
     }
   }
 }
