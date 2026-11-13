@@ -8,13 +8,14 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   Clock3,
   Columns2,
   Code,
   Copy,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileText,
   Filter,
   Folder,
@@ -24,14 +25,11 @@ import {
   Globe,
   HardDriveDownload,
   History,
-  Info,
   KeyRound,
   Layers,
-  ListOrdered,
   LoaderCircle,
   LockKeyhole,
   Package,
-  Pause,
   Play,
   Plus,
   RefreshCw,
@@ -455,6 +453,7 @@ function App() {
   const [localInspect, setLocalInspect] = useState(null)
   const [inspectingLocal, setInspectingLocal] = useState(false)
   const [toast, setToast] = useState('')
+  const toastTimerRef = useRef(null)
   const [toolStatus, setToolStatus] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [credentialTab, setCredentialTab] = useState('git')
@@ -552,8 +551,8 @@ function App() {
   // 版本发布状态 (mode === 'release')
   const [releaseTarget, setReleaseTarget] = useState(() => localStorage.getItem('code-sync-release-target') || localStorage.getItem('code-sync-push-target') || '')
   const [releaseRemoteUrl, setReleaseRemoteUrl] = useState(() => localStorage.getItem('code-sync-release-remote') || '')
-  const [releaseTag, setReleaseTag] = useState('v1.4.5')
-  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.5')
+  const [releaseTag, setReleaseTag] = useState('v1.4.6')
+  const [releaseTitle, setReleaseTitle] = useState('CodeSync Studio v1.4.6')
   const [releaseBranch, setReleaseBranch] = useState('main')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseToken, setReleaseToken] = useState('')
@@ -1088,8 +1087,7 @@ function App() {
       if (event.type === 'done') {
         setRunning(false)
         setProgress((current) => ({ ...current, value: event.ok ? 100 : current.value, label: event.label, status: event.ok ? 'success' : 'error' }))
-        setToast(event.ok ? '任务已完成' : '任务执行失败，请查看日志')
-        window.setTimeout(() => setToast(''), 2600)
+        showToast(event.ok ? '任务已完成' : '任务执行失败，请查看日志')
       }
     })
     return () => {
@@ -1099,10 +1097,17 @@ function App() {
   }, [])
 
   // Global keyboard shortcuts: Ctrl+1..6 switch workbench, Ctrl/⌘+Enter starts the
-  // primary action of the current workbench, Esc closes the settings dialog.
+  // primary action of the current workbench, Ctrl+K focuses search, Esc closes the settings dialog.
   useEffect(() => {
     const MENU_ORDER = ['single', 'batch', 'push', 'release', 'workspace', 'history']
     function onKeyDown(event) {
+      if (event.key === 'Escape') {
+        if (settingsOpen && !credentialSaving && !credentialTesting) {
+          event.preventDefault()
+          setSettingsOpen(false)
+        }
+        return
+      }
       const mod = event.ctrlKey || event.metaKey
       if (!mod) return
       const key = event.key
@@ -1115,6 +1120,7 @@ function App() {
         return
       }
       if (key === 'Enter') {
+        if (settingsOpen) return
         event.preventDefault()
         if (running || batchRunning || pushRunning || releaseRunning) return
         if (mode === 'single') runTask()
@@ -1123,16 +1129,20 @@ function App() {
         else if (mode === 'release') runReleaseTask()
         return
       }
-      if (key === 'k') {
-        event.preventDefault()
-        const searchable = document.querySelector('.workspace-table-container, .history-table-container')
-        const input = searchable?.querySelector('input')
-        if (input) input.focus()
+      if (key.toLowerCase() === 'k') {
+        const input =
+          document.querySelector('[data-search-input="true"]') ||
+          document.querySelector('.workspace-table-container, .history-table-container')?.querySelector('input')
+        if (input) {
+          event.preventDefault()
+          input.focus()
+          input.select?.()
+        }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [mode, running, batchRunning, pushRunning, releaseRunning])
+  }, [mode, running, batchRunning, pushRunning, releaseRunning, settingsOpen, credentialSaving, credentialTesting])
 
   useEffect(() => {
     setRepo(null)
@@ -1858,9 +1868,11 @@ function App() {
           ...diffLines.map((line) => ({
             time: now,
             text: line,
-            source: line.startsWith('-') && !line.startsWith('---')
-              ? 'stderr'
-              : line.startsWith('+') && !line.startsWith('+++')
+            source: line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')
+              ? 'diff-meta'
+              : line.startsWith('-')
+              ? 'diff-del'
+              : line.startsWith('+')
               ? 'diff-add'
               : line.startsWith('@@')
               ? 'diff-hunk'
@@ -2077,7 +2089,7 @@ function App() {
   }
 
   function generateReleaseChangelog() {
-    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.5'
+    const title = releaseTitle.trim() || releaseTag.trim() || 'v1.4.6'
     const commits = releaseWorkspace?.recentCommits || '- 新增：常规功能升级与细节体验优化'
     const assetSection = releaseAssets.length > 0
       ? `\n### 📦 发行版附件\n${releaseAssets.map((a) => `- \`${a.uploadName || a.name}\` (${formatFileSize(a.size)})`).join('\n')}\n`
@@ -2089,7 +2101,7 @@ function App() {
   async function runReleaseTask() {
     if (running || batchRunning || pushRunning || releaseRunning) return
     if (!releaseRemoteUrl.trim()) return showToast('请先填写远程 GitHub / Gitee 仓库地址')
-    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.5）')
+    if (!releaseTag.trim()) return showToast('请先填写 Release 版本标签（如 v1.4.6）')
     if (!api) return showToast('任务执行需要在桌面版中运行')
 
     setReleaseRunning(true)
@@ -2274,7 +2286,11 @@ function App() {
 
   function showToast(message) {
     setToast(message)
-    window.setTimeout(() => setToast(''), 2600)
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast('')
+      toastTimerRef.current = null
+    }, 2600)
   }
 
   async function openCredentialSettings() {
@@ -2420,14 +2436,14 @@ function App() {
           <div className="brand-mark" title="CodeSync Studio">
             <img src={logoUrl} alt="CodeSync Studio" />
           </div>
-          <span className="brand-badge">v1.4.5</span>
+          <span className="brand-badge">v1.4.6</span>
         </div>
 
         <nav className="side-nav">
           <button
             className={`side-nav-item ${mode === 'single' ? 'active' : ''}`}
             onClick={() => setMode('single')}
-            title="单仓代码拉取与更新"
+            title="单仓代码拉取与更新 (Ctrl+1)"
           >
             <HardDriveDownload size={18} />
             <span>单仓</span>
@@ -2435,7 +2451,7 @@ function App() {
           <button
             className={`side-nav-item ${mode === 'batch' ? 'active' : ''}`}
             onClick={() => setMode('batch')}
-            title="多仓批量队列拉取"
+            title="多仓批量队列拉取 (Ctrl+2)"
           >
             <Layers size={18} />
             <span>批量</span>
@@ -2443,7 +2459,7 @@ function App() {
           <button
             className={`side-nav-item ${mode === 'push' ? 'active' : ''}`}
             onClick={() => setMode('push')}
-            title="本地代码提交与推送"
+            title="本地代码提交与推送 (Ctrl+3)"
           >
             <Upload size={18} />
             <span>推送</span>
@@ -3113,6 +3129,7 @@ function App() {
                     <Search size={14} color="#64748b" />
                     <input
                       className="history-search-input"
+                      data-search-input="true"
                       placeholder="搜索历史记录 (仓库地址 / 目录 / 分支)..."
                       value={historyFilter}
                       onChange={(e) => setHistoryFilter(e.target.value)}
@@ -3628,6 +3645,7 @@ function BatchTaskPanel({
   const terminalRef = useRef(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [onlyErrors, setOnlyErrors] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (autoScroll && terminalRef.current) {
@@ -3636,8 +3654,13 @@ function BatchTaskPanel({
   }, [progress.logs, autoScroll])
 
   const copyAllLogs = () => {
-    const text = progress.logs.map((l) => `[${l.time}] ${l.text}`).join('\n')
-    navigator.clipboard.writeText(text)
+    if (!progress.logs.length) return
+    const text = progress.logs
+      .map((l) => `[${new Date(l.time).toLocaleTimeString('zh-CN', { hour12: false })}] ${l.text}`)
+      .join('\n')
+    navigator.clipboard?.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
   }
 
   const filteredLogs = useMemo(() => {
@@ -3665,6 +3688,7 @@ function BatchTaskPanel({
           <div className="input-with-icon batch-filter-input">
             <Filter size={11} />
             <input
+              data-search-input="true"
               placeholder="过滤项目名/分支..."
               value={batchFilter}
               onChange={(e) => setBatchFilter(e.target.value)}
@@ -3867,7 +3891,7 @@ function BatchTaskPanel({
             <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
               {autoScroll ? '锁定滚动' : '跟随滚动'}
             </button>
-            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
+            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>{copied ? <><Check size={11} /> 已复制</> : '复制'}</button>
             <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
           </div>
         </div>
@@ -4309,6 +4333,7 @@ function PushTaskPanel({
   const terminalRef = useRef(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [onlyErrors, setOnlyErrors] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (autoScroll && terminalRef.current) {
@@ -4317,8 +4342,13 @@ function PushTaskPanel({
   }, [progress.logs, autoScroll])
 
   const copyAllLogs = () => {
-    const text = progress.logs.map((l) => `[${l.time}] ${l.text}`).join('\n')
-    navigator.clipboard.writeText(text)
+    if (!progress.logs.length) return
+    const text = progress.logs
+      .map((l) => `[${new Date(l.time).toLocaleTimeString('zh-CN', { hour12: false })}] ${l.text}`)
+      .join('\n')
+    navigator.clipboard?.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
   }
 
   const filteredLogs = useMemo(() => {
@@ -4474,7 +4504,7 @@ function PushTaskPanel({
             <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
               {autoScroll ? '锁定滚动' : '跟随滚动'}
             </button>
-            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
+            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>{copied ? <><Check size={11} /> 已复制</> : '复制'}</button>
             <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
           </div>
         </div>
@@ -4676,6 +4706,7 @@ function WorkspacePanel({
               <Search size={14} color="#64748b" />
               <input
                 className="history-search-input"
+                data-search-input="true"
                 placeholder="过滤仓库名称 / 分支 / 远程地址..."
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
@@ -4962,6 +4993,10 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
   const svn = form.svn
   const gitStatus = status?.git
   const svnStatus = status?.svn
+  const [showSecret, setShowSecret] = useState(false)
+  useEffect(() => {
+    setShowSecret(false)
+  }, [tab, git.mode])
   const setSecret = (section, field, clearField, value) => {
     onChange(section, field, value)
     if (value) onChange(section, clearField, false)
@@ -4975,7 +5010,7 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
             <p className="section-kicker">CONNECTION</p>
             <h2 id="credential-dialog-title">连接设置</h2>
           </div>
-          <button className="icon-button dialog-close" onClick={onClose} disabled={saving || testing} title="关闭"><X size={18} /></button>
+          <button className="icon-button dialog-close" onClick={onClose} disabled={saving || testing} title="关闭 (Esc)"><X size={18} /></button>
         </div>
         <p className="dialog-intro">
           {tab === 'network'
@@ -5031,7 +5066,10 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
                 </div>
                 <div className="input-with-icon">
                   <LockKeyhole size={15} />
-                  <input id="git-token" type="password" autoComplete="new-password" value={git.token} onChange={(event) => setSecret('git', 'token', 'clearToken', event.target.value)} placeholder={git.clearToken ? '保存后清除已配置凭证' : gitStatus?.tokenConfigured ? '已配置，留空保持不变' : '输入密码或 Personal Access Token'} />
+                  <input id="git-token" type={showSecret ? 'text' : 'password'} autoComplete="new-password" value={git.token} onChange={(event) => setSecret('git', 'token', 'clearToken', event.target.value)} placeholder={git.clearToken ? '保存后清除已配置凭证' : gitStatus?.tokenConfigured ? '已配置，留空保持不变' : '输入密码或 Personal Access Token'} />
+                  <button type="button" className="secret-toggle-btn" onClick={() => setShowSecret((v) => !v)} title={showSecret ? '隐藏内容' : '显示内容'} aria-label={showSecret ? '隐藏内容' : '显示内容'}>
+                    {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
                   <button type="button" className={`credential-clear ${git.clearToken ? 'pending' : ''}`} onClick={() => { onChange('git', 'token', ''); onChange('git', 'clearToken', true) }} disabled={!gitStatus?.tokenConfigured && !git.token && !git.clearToken} title="清除 Git 凭证"><Trash2 size={14} /></button>
                 </div>
               </div>
@@ -5055,7 +5093,10 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
                   </div>
                   <div className="input-with-icon">
                     <LockKeyhole size={15} />
-                    <input id="git-passphrase" type="password" autoComplete="new-password" value={git.sshPassphrase} onChange={(event) => setSecret('git', 'sshPassphrase', 'clearSshPassphrase', event.target.value)} placeholder={git.clearSshPassphrase ? '保存后清除已配置口令' : gitStatus?.sshPassphraseConfigured ? '已配置，留空保持不变' : '没有口令可留空'} />
+                    <input id="git-passphrase" type={showSecret ? 'text' : 'password'} autoComplete="new-password" value={git.sshPassphrase} onChange={(event) => setSecret('git', 'sshPassphrase', 'clearSshPassphrase', event.target.value)} placeholder={git.clearSshPassphrase ? '保存后清除已配置口令' : gitStatus?.sshPassphraseConfigured ? '已配置，留空保持不变' : '没有口令可留空'} />
+                    <button type="button" className="secret-toggle-btn" onClick={() => setShowSecret((v) => !v)} title={showSecret ? '隐藏口令' : '显示口令'} aria-label={showSecret ? '隐藏口令' : '显示口令'}>
+                      {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
                     <button type="button" className={`credential-clear ${git.clearSshPassphrase ? 'pending' : ''}`} onClick={() => { onChange('git', 'sshPassphrase', ''); onChange('git', 'clearSshPassphrase', true) }} disabled={!gitStatus?.sshPassphraseConfigured && !git.sshPassphrase && !git.clearSshPassphrase} title="清除私钥口令"><Trash2 size={14} /></button>
                   </div>
                 </div>
@@ -5078,7 +5119,10 @@ function CredentialDialog({ tab, setTab, status, form, saving, testing, testMess
               </div>
               <div className="input-with-icon">
                 <LockKeyhole size={15} />
-                <input id="svn-password" type="password" autoComplete="new-password" value={svn.password} onChange={(event) => setSecret('svn', 'password', 'clearPassword', event.target.value)} placeholder={svn.clearPassword ? '保存后清除已配置密码' : svnStatus?.passwordConfigured ? '已配置，留空保持不变' : '输入 SVN 密码'} />
+                <input id="svn-password" type={showSecret ? 'text' : 'password'} autoComplete="new-password" value={svn.password} onChange={(event) => setSecret('svn', 'password', 'clearPassword', event.target.value)} placeholder={svn.clearPassword ? '保存后清除已配置密码' : svnStatus?.passwordConfigured ? '已配置，留空保持不变' : '输入 SVN 密码'} />
+                <button type="button" className="secret-toggle-btn" onClick={() => setShowSecret((v) => !v)} title={showSecret ? '隐藏密码' : '显示密码'} aria-label={showSecret ? '隐藏密码' : '显示密码'}>
+                  {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
                 <button type="button" className={`credential-clear ${svn.clearPassword ? 'pending' : ''}`} onClick={() => { onChange('svn', 'password', ''); onChange('svn', 'clearPassword', true) }} disabled={!svnStatus?.passwordConfigured && !svn.password && !svn.clearPassword} title="清除 SVN 密码"><Trash2 size={14} /></button>
               </div>
             </div>
@@ -5126,7 +5170,9 @@ function NetworkSettingsPane() {
   const [savingIdentity, setSavingIdentity] = useState(false)
   const [message, setMessage] = useState('')
   const [proxy, setProxy] = useState({ mode: 'system', url: '' })
+  const [savedProxy, setSavedProxy] = useState({ mode: 'system', url: '' })
   const [identity, setIdentity] = useState({ name: '', email: '' })
+  const [savedIdentity, setSavedIdentity] = useState({ name: '', email: '' })
   const [globalInfo, setGlobalInfo] = useState({ name: '', email: '' })
   const [runtime, setRuntime] = useState(null)
 
@@ -5137,11 +5183,15 @@ function NetworkSettingsPane() {
     }
     Promise.all([api.getSettings(), api.getRuntimeInfo?.() || Promise.resolve(null)])
       .then(([settings, info]) => {
-        setProxy(settings.proxy || { mode: 'system', url: '' })
-        setIdentity({
+        const nextProxy = settings.proxy || { mode: 'system', url: '' }
+        const nextIdentity = {
           name: settings.gitIdentity?.name || settings.globalName || '',
           email: settings.gitIdentity?.email || settings.globalEmail || ''
-        })
+        }
+        setProxy(nextProxy)
+        setSavedProxy(nextProxy)
+        setIdentity(nextIdentity)
+        setSavedIdentity(nextIdentity)
         setGlobalInfo({ name: settings.globalName || '', email: settings.globalEmail || '' })
         setRuntime(info)
       })
@@ -5149,15 +5199,28 @@ function NetworkSettingsPane() {
       .finally(() => setLoading(false))
   }, [])
 
+  const proxyDirty =
+    proxy.mode !== savedProxy.mode ||
+    (proxy.mode === 'custom' && proxy.url.trim() !== (savedProxy.url || '').trim())
+  const identityDirty =
+    identity.name.trim() !== savedIdentity.name.trim() ||
+    identity.email.trim() !== savedIdentity.email.trim()
+
   async function saveProxy() {
     if (!api?.saveSettings) return
     setSaving(true)
     setMessage('')
     try {
-      if (proxy.mode === 'custom' && !/^(https?|socks5?):\/\/.+/i.test(proxy.url.trim())) {
+      const normalizedProxy = {
+        mode: proxy.mode,
+        url: proxy.mode === 'custom' ? proxy.url.trim() : proxy.url
+      }
+      if (normalizedProxy.mode === 'custom' && !/^(https?|socks5?):\/\/.+/i.test(normalizedProxy.url)) {
         throw new Error('请填写完整代理地址，例如 http://127.0.0.1:7890')
       }
-      await api.saveSettings({ proxy })
+      await api.saveSettings({ proxy: normalizedProxy })
+      setProxy(normalizedProxy)
+      setSavedProxy(normalizedProxy)
       setMessage('代理设置已保存，后续 Git / SVN 操作立即生效')
     } catch (error) {
       setMessage(appError(error))
@@ -5168,10 +5231,17 @@ function NetworkSettingsPane() {
 
   async function saveIdentity() {
     if (!api?.saveGitIdentity) return
+    const nextIdentity = { name: identity.name.trim(), email: identity.email.trim() }
+    if (!nextIdentity.name && !nextIdentity.email) {
+      setMessage('请至少填写提交作者（user.name）或提交邮箱（user.email）')
+      return
+    }
     setSavingIdentity(true)
     setMessage('')
     try {
-      const status = await api.saveGitIdentity(identity)
+      const status = await api.saveGitIdentity(nextIdentity)
+      setIdentity(nextIdentity)
+      setSavedIdentity(nextIdentity)
       setGlobalInfo({ name: status.globalName || '', email: status.globalEmail || '' })
       setMessage('已写入 Git 全局配置 user.name / user.email')
     } catch (error) {
@@ -5188,7 +5258,10 @@ function NetworkSettingsPane() {
   return (
     <div className="credential-form network-pane">
       <div className="credential-field">
-        <label className="field-title">网络代理</label>
+        <div className="credential-label-row">
+          <label className="field-title">网络代理</label>
+          {proxyDirty && <span className="dirty-pill">有未保存更改</span>}
+        </div>
         <div className="credential-mode network-mode">
           <button type="button" className={proxy.mode === 'system' ? 'selected' : ''} onClick={() => setProxy({ ...proxy, mode: 'system' })}>
             <Globe size={14} />
@@ -5214,6 +5287,7 @@ function NetworkSettingsPane() {
               id="proxy-url"
               value={proxy.url}
               onChange={(event) => setProxy({ ...proxy, url: event.target.value })}
+              onKeyDown={(event) => { if (event.key === 'Enter') saveProxy() }}
               placeholder="http://127.0.0.1:7890"
             />
           </div>
@@ -5222,7 +5296,7 @@ function NetworkSettingsPane() {
       )}
 
       <div className="credential-field" style={{ marginTop: 2 }}>
-        <button type="button" className="ghost-action" onClick={saveProxy} disabled={saving}>
+        <button type="button" className={proxyDirty ? 'primary-action compact-save-btn' : 'ghost-action'} onClick={saveProxy} disabled={saving}>
           {saving ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
           保存代理设置
         </button>
@@ -5233,9 +5307,12 @@ function NetworkSettingsPane() {
       <div className="credential-field">
         <div className="credential-label-row">
           <label className="field-title">Git 全局身份</label>
-          <span className="network-current">
-            当前：{globalInfo.name || '未配置'} / {globalInfo.email || '未配置'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {identityDirty && <span className="dirty-pill">有未保存更改</span>}
+            <span className="network-current">
+              当前：{globalInfo.name || '未配置'} / {globalInfo.email || '未配置'}
+            </span>
+          </div>
         </div>
         <div className="network-grid">
           <div className="input-with-icon">
@@ -5243,6 +5320,7 @@ function NetworkSettingsPane() {
             <input
               value={identity.name}
               onChange={(event) => setIdentity({ ...identity, name: event.target.value })}
+              onKeyDown={(event) => { if (event.key === 'Enter') saveIdentity() }}
               placeholder="user.name（提交作者）"
             />
           </div>
@@ -5251,6 +5329,7 @@ function NetworkSettingsPane() {
             <input
               value={identity.email}
               onChange={(event) => setIdentity({ ...identity, email: event.target.value })}
+              onKeyDown={(event) => { if (event.key === 'Enter') saveIdentity() }}
               placeholder="user.email（提交邮箱）"
             />
           </div>
@@ -5259,7 +5338,7 @@ function NetworkSettingsPane() {
       </div>
 
       <div className="credential-field">
-        <button type="button" className="ghost-action" onClick={saveIdentity} disabled={savingIdentity}>
+        <button type="button" className={identityDirty ? 'primary-action compact-save-btn' : 'ghost-action'} onClick={saveIdentity} disabled={savingIdentity}>
           {savingIdentity ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
           写入 Git 全局配置
         </button>
@@ -5405,6 +5484,7 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
   const terminalRef = useRef(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [onlyErrors, setOnlyErrors] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (autoScroll && terminalRef.current) {
@@ -5413,8 +5493,13 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
   }, [progress.logs, autoScroll])
 
   const copyAllLogs = () => {
-    const text = progress.logs.map((l) => `[${l.time}] ${l.text}`).join('\n')
-    navigator.clipboard.writeText(text)
+    if (!progress.logs.length) return
+    const text = progress.logs
+      .map((l) => `[${new Date(l.time).toLocaleTimeString('zh-CN', { hour12: false })}] ${l.text}`)
+      .join('\n')
+    navigator.clipboard?.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
   }
 
   const filteredLogs = useMemo(() => {
@@ -5461,7 +5546,7 @@ function TaskPanel({ progress, running, elapsedSeconds, targetPath, onOpenPath, 
           <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
             {autoScroll ? '锁定滚动' : '跟随滚动'}
           </button>
-          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
+          <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>{copied ? <><Check size={11} /> 已复制</> : '复制'}</button>
           <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
         </div>
       </div>
@@ -5541,6 +5626,7 @@ function ReleaseSyncPanel({
   const repoLabel = releaseWorkspace?.parsedRepo
     ? `${releaseWorkspace.parsedRepo.owner}/${releaseWorkspace.parsedRepo.repo}`
     : ''
+  const [showToken, setShowToken] = useState(false)
 
   return (
     <div className="sync-panel release-panel panel">
@@ -5606,7 +5692,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTag}
                 onChange={(e) => setReleaseTag(e.target.value)}
-                placeholder="v1.4.5"
+                placeholder="v1.4.6"
                 disabled={releaseRunning}
               />
             </div>
@@ -5638,7 +5724,7 @@ function ReleaseSyncPanel({
               <input
                 value={releaseTitle}
                 onChange={(e) => setReleaseTitle(e.target.value)}
-                placeholder="CodeSync Studio v1.4.5"
+                placeholder="CodeSync Studio v1.4.6"
                 disabled={releaseRunning}
               />
             </div>
@@ -5652,12 +5738,22 @@ function ReleaseSyncPanel({
             <div className="input-with-icon">
               <KeyRound size={14} />
               <input
-                type="password"
+                type={showToken ? 'text' : 'password'}
                 value={releaseToken}
                 onChange={(e) => setReleaseToken(e.target.value)}
                 placeholder={releaseWorkspace?.tokenConfigured ? '默认使用已存 Token' : 'GitHub / Gitee Token'}
                 disabled={releaseRunning}
               />
+              <button
+                type="button"
+                className="secret-toggle-btn"
+                onClick={() => setShowToken((v) => !v)}
+                disabled={releaseRunning}
+                title={showToken ? '隐藏令牌' : '显示令牌'}
+                aria-label={showToken ? '隐藏令牌' : '显示令牌'}
+              >
+                {showToken ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
             </div>
           </div>
         </div>
@@ -5782,6 +5878,7 @@ function ReleaseTaskPanel({
 }) {
   const [autoScroll, setAutoScroll] = useState(true)
   const [onlyErrors, setOnlyErrors] = useState(false)
+  const [copied, setCopied] = useState(false)
   const terminalRef = useRef(null)
 
   const filteredLogs = useMemo(() => {
@@ -5809,6 +5906,8 @@ function ReleaseTaskPanel({
       .map((l) => `[${new Date(l.time).toLocaleTimeString('zh-CN', { hour12: false })}] ${l.text}`)
       .join('\n')
     navigator.clipboard?.writeText(content)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
   }
 
   const renderAssetsTable = (isSplit = false) => (
@@ -5950,7 +6049,7 @@ function ReleaseTaskPanel({
             <button type="button" onClick={() => setAutoScroll(!autoScroll)}>
               {autoScroll ? '锁定滚动' : '跟随滚动'}
             </button>
-            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>复制</button>
+            <button type="button" onClick={copyAllLogs} disabled={!progress.logs.length}>{copied ? <><Check size={11} /> 已复制</> : '复制'}</button>
             <button type="button" onClick={clearLogs} disabled={!progress.logs.length}>清空</button>
           </div>
         </div>

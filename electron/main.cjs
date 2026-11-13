@@ -1833,7 +1833,7 @@ async function publishReleaseTask(jobId, payload) {
   sendTaskEvent({ type: 'step', jobId, value: 4, label: '正在校验仓库信息与发布凭据...' })
 
   const tagName = String(rawTag || '').trim()
-  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.5）。')
+  if (!tagName) throw new Error('请填写 Release 版本标签（例如 v1.4.6）。')
   const releaseTitle = String(rawTitle || '').trim() || tagName
   const releaseNotes = String(rawNotes || '').trim()
   const targetCommitish = String(rawCommitish || '').trim() || 'main'
